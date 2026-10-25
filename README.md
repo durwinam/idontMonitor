@@ -6,7 +6,7 @@
 
 ### پایش سرور، با دیدی روشن‌تر
 
-`while (server.is_alive()) { monitor(); }`
+
 ![Version](https://img.shields.io/badge/Version-1.8.1-7C3AED?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.x-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Linux](https://img.shields.io/badge/Operating%20System-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)
