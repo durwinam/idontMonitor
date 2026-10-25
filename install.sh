@@ -1,6 +1,48 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
+
+# Remote bootstrap: download the complete project archive, then run its installer.
+# When this file is executed from the extracted project directory, continue normally.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -f "$SCRIPT_DIR/app/main.py" ]]; then
+  if [[ $EUID -ne 0 ]]; then
+    echo "Run as root: sudo bash install.sh" >&2
+    exit 1
+  fi
+  command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required." >&2; exit 1; }
+  command -v tar >/dev/null 2>&1 || { echo "ERROR: tar is required." >&2; exit 1; }
+
+  REPOSITORY="durwinam/idontMonitor"
+  BRANCH="main"
+  TEMP_DIR="$(mktemp -d -t idontmonitor-install.XXXXXX)"
+  cleanup_bootstrap() { rm -rf -- "$TEMP_DIR"; }
+  trap cleanup_bootstrap EXIT INT TERM
+
+  echo "[idontMonitor] Downloading the project source..."
+  if ! curl -fLsS --retry 3 \
+      "https://github.com/${REPOSITORY}/archive/refs/heads/${BRANCH}.tar.gz" \
+      -o "$TEMP_DIR/source.tar.gz"; then
+    echo "ERROR: Failed to download the project archive." >&2
+    exit 1
+  fi
+
+  mkdir -p "$TEMP_DIR/source"
+  if ! tar -xzf "$TEMP_DIR/source.tar.gz" -C "$TEMP_DIR/source" --strip-components=1; then
+    echo "ERROR: The downloaded project archive is invalid." >&2
+    exit 1
+  fi
+
+  if [[ ! -f "$TEMP_DIR/source/app/main.py" || ! -f "$TEMP_DIR/source/install.sh" ]]; then
+    echo "ERROR: The project archive does not contain the expected installer and application files." >&2
+    exit 1
+  fi
+
+  # Keep the temporary source alive while the real installer is running.
+  bash "$TEMP_DIR/source/install.sh" "$@"
+  exit $?
+fi
+
 VERSION="1.8.1"
 REPO_URL="https://github.com/durwinam/idontMonitor"
 INSTALL_DIR="/opt/idontmonitor"
@@ -10,7 +52,6 @@ LOG_DIR="/var/log/idontmonitor"
 SERVICE="idontmonitor"
 
 if [[ $EUID -ne 0 ]]; then echo "Run as root: sudo bash install.sh" >&2; exit 1; fi
-if [[ ! -f "$(dirname "$0")/app/main.py" ]]; then echo "Run install.sh from the extracted project directory." >&2; exit 1; fi
 EXISTING_INSTALL=0
 if [[ -e "$INSTALL_DIR/current" || -L "$INSTALL_DIR/current" ]]; then
   EXISTING_INSTALL=1
@@ -123,7 +164,7 @@ if ! id idontmonitor >/dev/null 2>&1; then useradd --system --home-dir /var/lib/
 install -d -o root -g root -m 0755 "$INSTALL_DIR" "$INSTALL_DIR/releases" "$INSTALL_DIR/releases/$VERSION"
 install -d -o root -g idontmonitor -m 0750 "$CONFIG_DIR"
 install -d -o idontmonitor -g idontmonitor -m 0750 "$STATE_DIR" "$LOG_DIR"
-cp -a "$(dirname "$0")/." "$INSTALL_DIR/releases/$VERSION/"
+cp -a "$SCRIPT_DIR/." "$INSTALL_DIR/releases/$VERSION/"
 chown -R root:root "$INSTALL_DIR/releases/$VERSION"
 ln -s "$INSTALL_DIR/releases/$VERSION" "$INSTALL_DIR/current.new"
 mv -Tf "$INSTALL_DIR/current.new" "$INSTALL_DIR/current"
@@ -389,22 +430,14 @@ update_check(){
     if [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then printf '%s %s\n' "$now" "$latest" > "$cache" 2>/dev/null || true; else latest=''; fi
   fi
   if [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$(printf '%s\n%s\n' "$VERSION" "$latest" | sort -V | tail -1)" == "$latest" ]] && [[ "$latest" != "$VERSION" ]]; then
-    printf '\033[1;33m  Update available: current v%s → latest v%s\033[0m\n' "$VERSION" "$latest"
+    printf '\033[1;33m  Update available: current v%s -> latest v%s\033[0m\n' "$VERSION" "$latest"
   elif [[ -n "$latest" ]]; then printf '  Version status: v%s is up to date\n' "$VERSION"; fi
 }
 banner(){
   clear 2>/dev/null || true
   printf '\033[1;35m'
   cat <<'ART'
-  ██╗██████╗  ██████╗ ███╗   ██╗████████╗
-  ██║██╔══██╗██╔═══██╗████╗  ██║╚══██╔══╝
-  ██║██║  ██║██║   ██║██╔██╗ ██║   ██║
-  ██║██║  ██║██║   ██║██║╚██╗██║   ██║
-  ██║██████╔╝╚██████╔╝██║ ╚████║   ██║
-  ╚═╝╚═════╝  ╚═════╝ ╚═╝  ╚═══╝   ╚═╝
-ART
-  printf '\033[0m'
-  echo "  idontMonitor v${VERSION} | VPS CONTROL CENTER"
+  printf "idontMonitor VPS CONTROL CENTER\\n"\n  echo "  idontMonitor v${VERSION} | VPS CONTROL CENTER"
   update_check
   line
 }
@@ -566,6 +599,77 @@ backup_menu(){
   while true; do
     banner; echo "BACKUP & RESTORE"; echo "  1) Create protected config backup"; echo "  2) List backups"; echo "  0) Back"
     read -r -p 'Select: ' c || return
+    case "$c" in
+      1) install -d -m 0700 "$d"; local f="$d/idontmonitor-config-$(date +%Y%m%d-%H%M%S).tar.gz"; tar -czf "$f" /etc/idontmonitor /var/lib/idontmonitor/install-mode 2>/dev/null && chmod 0600 "$f" && echo "Backup created: $f" || echo "Backup failed."; pause;;
+      2) if [[ -d "$d" ]]; then find "$d" -maxdepth 1 -type f -printf '%f (%s bytes)\n'; else echo "No backups yet."; fi; pause;;
+      0) return;; *) echo "Invalid option"; sleep 1;;
+    esac
+  done
+}
+case "${1:-menu}" in
+  status) svc_status; systemctl --no-pager --full status idontmonitor 2>/dev/null || true;;
+  url) get_url;;
+  logs) journalctl -u idontmonitor -n "${2:-100}" --no-pager;;
+  restart) systemctl restart idontmonitor && echo "Restarted.";;
+  update-check) update_check;;
+  update)
+    if [[ $EUID -ne 0 ]]; then echo "Run: sudo idontMonitor update"; exit 1; fi
+    if [[ ! -x /usr/local/sbin/idontmonitor-update ]]; then echo "Update helper is missing. Upgrade with the official installer first."; exit 2; fi
+    echo "Checking GitHub release and installing the verified update on this VPS..."
+    exec /usr/local/sbin/idontmonitor-update apply;;
+  menu)
+    while true; do
+      banner
+      echo "  1) Server Status"
+      echo "  2) VPS Management"
+      echo "  3) Traffic Monitor"
+      echo "  4) Threat Monitor"
+      echo "  5) Network Diagnostics"
+      echo "  6) Telegram Bot"
+      echo "  7) Web Panel"
+      echo "  8) Backup & Restore"
+      echo "  9) Update"
+      echo " 10) Uninstall"
+      echo "  0) Exit"
+      read -r -p 'Select: ' choice || exit 0
+      case "$choice" in
+        1) banner; svc_status; systemctl --no-pager --full status idontmonitor 2>/dev/null || true; pause;;
+        2) vps_menu;;
+        3) banner; traffic; pause;;
+        4) banner; threats; pause;;
+        5) banner; network_diag; pause;;
+        6) banner; echo "Telegram Bot integration is not configured in this release."; echo "No bot settings were found or changed."; pause;;
+        7) panel_menu;;
+        8) backup_menu;;
+        9) banner; echo "Secure self-updater is not implemented in this release."; echo "No files were changed. Update only from a verified release."; pause;;
+        10) banner; echo "Uninstall removes services and application files and may be destructive."; read -r -p 'Type UNINSTALL to continue: ' confirm; if [[ "$confirm" == UNINSTALL ]]; then echo "Automatic uninstall is not implemented in this release; nothing was removed."; else echo "Cancelled."; fi; pause;;
+        0) exit 0;;
+        *) echo "Invalid option"; sleep 1;;
+      esac
+    done;;
+  *) echo "Usage: idontMonitor [status|url|logs [N]|restart|update]"; exit 2;;
+esac
+CLI
+chmod 0755 /usr/local/bin/idontMonitor
+
+printf '\n\033[1;35m============================================================\033[0m\n'
+printf '\033[1;36m                    idontMonitor\033[0m\n'
+printf '\033[1;35m============================================================\033[0m\n'
+printf 'Version       : %s\nPanel URL     : %s\nAdmin username: admin\n' "$VERSION" "$PANEL_URL"
+if [[ -n "$INITIAL_PASSWORD" ]]; then
+  printf 'Initial password: %s\n' "$INITIAL_PASSWORD"
+  printf '\nIMPORTANT: Save this one-time password now. Only its hash is stored.\n'
+else
+  printf '\nExisting credentials preserved. The installer did not change or reveal your password.\n'
+fi
+if [[ "$MODE" == "http" ]]; then printf '\033[1;31mWARNING: HTTP is unencrypted. Use only on a trusted network or switch to HTTPS.\033[0m\n'; else printf 'TLS: Caddy will obtain and renew the certificate automatically if DNS and ports 80/443 are reachable.\n'; fi
+printf 'CLI: idontMonitor | Status: idontMonitor status | URL: idontMonitor url\n'
+printf '\nInstaller finished.\n'
+if (( HEALTH_OK == 1 )); then printf 'Application health: OK (127.0.0.1:%s)\n' "$APP_PORT"; else printf '\033[1;31mApplication health: FAILED (port %s)\033[0m\n' "$APP_PORT"; printf 'Check: journalctl -u idontmonitor -n 100 --no-pager\n'; systemctl status idontmonitor --no-pager -l || true; journalctl -u idontmonitor -n 40 --no-pager || true; fi
+if (( CADDY_START_OK == 0 )); then printf '\033[1;33mProxy/TLS did not start or reload. Check: journalctl -u caddy -n 100 --no-pager\n'; systemctl status caddy --no-pager -l || true; fi
+if [[ "$MODE" == "https" ]]; then printf 'TLS certificate issuance requires valid DNS and inbound ports 80/443.\n'; fi
+printf 'No unrelated service was intentionally stopped.\n' 
+
     case "$c" in
       1) install -d -m 0700 "$d"; local f="$d/idontmonitor-config-$(date +%Y%m%d-%H%M%S).tar.gz"; tar -czf "$f" /etc/idontmonitor /var/lib/idontmonitor/install-mode 2>/dev/null && chmod 0600 "$f" && echo "Backup created: $f" || echo "Backup failed."; pause;;
       2) if [[ -d "$d" ]]; then find "$d" -maxdepth 1 -type f -printf '%f (%s bytes)\n'; else echo "No backups yet."; fi; pause;;
