@@ -7,12 +7,10 @@
 ### پایش سرور، با دیدی روشن‌تر
 
 `while (server.is_alive()) { monitor(); }`
-
-![نسخه](https://img.shields.io/badge/نسخه-1.8.1-7C3AED?style=for-the-badge)
-![پایتون](https://img.shields.io/badge/پایتون-3.x-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![لینوکس](https://img.shields.io/badge/سیستم‌عامل-لینوکس-FCC624?style=for-the-badge&logo=linux&logoColor=black)
-![مجوز](https://img.shields.io/badge/مجوز-MIT-22C55E?style=for-the-badge)
-
+![Version](https://img.shields.io/badge/Version-1.8.1-7C3AED?style=for-the-badge)
+![Python](https://img.shields.io/badge/Python-3.x-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Linux](https://img.shields.io/badge/Operating%20System-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)
+![License](https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge)
 **پایش · تحلیل · مدیریت**
 
 [معرفی](#معرفی) · [قابلیت‌ها](#قابلیتهای-پروژه) · [نصب](#نصب-سریع) · [مدیریت](#مدیریت-با-خط-فرمان) · [به‌روزرسانی](#بهروزرسانی)
