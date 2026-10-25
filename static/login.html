@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#070910">
+<link rel="icon" type="image/svg+xml" href="/static/idontmonitor-mark.png?v=180">
+<title>Secure access · idontMonitor</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+<div class="login-grid" aria-hidden="true"></div>
+<div class="login-orb login-orb-one" aria-hidden="true"></div>
+<div class="login-orb login-orb-two" aria-hidden="true"></div>
+<label class="language-control login-language" for="languageSelect"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg><select id="languageSelect" aria-label="Select language"><option value="en">English</option><option value="fa">فارسی</option></select></label>
+<main class="login-layout">
+  <section class="login-story" aria-label="idontMonitor introduction">
+    <a class="login-brand" href="/login" aria-label="idontMonitor home">
+      <span class="login-logo"><img src="/static/idontmonitor-mark.png?v=180" alt="idontMonitor logo" width="54" height="54"></span>
+      <span><strong>idont<span>Monitor</span></strong><small>INFRASTRUCTURE INTELLIGENCE</small></span>
+    </a>
+    <div class="story-copy">
+      <span class="story-kicker"><i></i> CONTROL. CLARITY. CONFIDENCE.</span>
+      <h1>Your infrastructure.<br><span>In perfect focus.</span></h1>
+      <p>A clear view of server health, network activity and security — built for the systems you depend on.</p>
+    </div>
+    <div class="login-feature-row">
+      <div class="feature-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></svg></div>
+      <div><b>Live system telemetry</b><small>Resources, uptime and network signals</small></div>
+      <span class="feature-check"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></span>
+    </div>
+    <div class="login-feature-row">
+      <div class="feature-icon mint-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 20 6v5c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg></div>
+      <div><b>Protected control center</b><small>Private access with rate-limited sign-in</small></div>
+      <span class="feature-check"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></span>
+    </div>
+    <div class="login-copyright">© <span id="year"></span> idontMonitor <span class="copyright-dot"></span> PRIVATE INFRASTRUCTURE CONSOLE</div>
+  </section>
+  <section class="login-panel glass" aria-labelledby="loginTitle">
+    <div class="panel-topline"><span class="secure-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg></span><span class="secure-label"><i></i> SECURE SESSION</span></div>
+    <div class="login-heading"><p class="eyebrow">WELCOME BACK</p><h2 id="loginTitle">Sign in to continue</h2><p>Enter your administrator credentials to open your control center.</p></div>
+    <form method="post" action="/login" id="loginForm" novalidate>
+      <label for="username">Username <span>ACCOUNT ID</span></label>
+      <div class="login-input-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="128" placeholder="Your username"></div>
+      <label for="password">Password <span>PRIVATE CREDENTIAL</span></label>
+      <div class="login-input-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024" placeholder="Enter your password"><button class="password-toggle" type="button" id="togglePassword" aria-label="Show password" title="Show password"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+      <p id="error" class="login-error" role="alert" hidden></p>
+      <button class="login-submit" type="submit"><span class="submit-label">Authenticate securely</span><span class="submit-arrow"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 5l7 7-7 7"/></svg></span></button>
+    </form>
+    <div class="login-assurance"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 20 6v5c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg><span><b>Private by design</b><small>No public registration · Rate-limited access</small></span></div>
+    <p class="login-footnote">If you did not receive access from your administrator, contact your system owner.</p>
+  </section>
+</main>
+<script>
+const form=document.getElementById('loginForm');
+const button=form.querySelector('.login-submit');
+const errorBox=document.getElementById('error');
+document.getElementById('year').textContent=new Date().getFullYear();
+document.getElementById('togglePassword').addEventListener('click',()=>{const input=document.getElementById('password');const showing=input.type==='text';input.type=showing?'password':'text';const btn=document.getElementById('togglePassword');btn.setAttribute('aria-label',showing?'Show password':'Hide password');btn.title=showing?'Show password':'Hide password';});
+form.addEventListener('submit',async e=>{e.preventDefault();errorBox.hidden=true;if(!form.reportValidity())return;button.disabled=true;button.classList.add('is-loading');button.querySelector('.submit-label').textContent='Verifying credentials…';const body=new URLSearchParams(new FormData(form));try{const r=await fetch('/login',{method:'POST',body,redirect:'manual',credentials:'same-origin'});if(r.status===303||r.type==='opaqueredirect'){location.href='/';return}const data=await r.json().catch(()=>({detail:'Sign-in failed. Please try again.'}));errorBox.textContent=data.detail||'Sign-in failed. Please try again.';errorBox.hidden=false;}catch{errorBox.textContent='Unable to reach the server. Check your connection and try again.';errorBox.hidden=false;}finally{button.disabled=false;button.classList.remove('is-loading');button.querySelector('.submit-label').textContent='Authenticate securely';}});
+</script>
+<script src="/static/i18n.js"></script></body>
+</html>
