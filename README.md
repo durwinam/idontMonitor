@@ -1,187 +1,166 @@
- 
 <div align="center">
 
-<img src="static/idontmonitor-logo.png" width="110" alt="idontMonitor Logo">
+<img src="static/idontmonitor-logo.png" alt="لوگوی آیدونت مانیتور" width="105">
 
 # `idontMonitor`
 
-**`// Observe. Analyze. Protect.`**
+### `پایش | تحلیل | کنترل`
 
-[![Version](https://img.shields.io/badge/version-1.8.1-00D4FF?style=for-the-badge&logo=semver&logoColor=white)](VERSION)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/Platform-Linux-111827?style=for-the-badge&logo=linux&logoColor=white)](https://www.kernel.org/)
-[![License](https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](LICENSE)
+**مانیتورینگ سرور با رویکردی مدرن، ساختاری منظم و تجربه‌ای حرفه‌ای**
 
-**A modern server monitoring experience, built for clarity, control, and performance.**
+![نسخه](https://img.shields.io/badge/نسخه-1.8.1-7C3AED?style=for-the-badge)
+![پایتون](https://img.shields.io/badge/پایتون-3.x-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![لینوکس](https://img.shields.io/badge/سیستم‌عامل-لینوکس-FCC624?style=for-the-badge&logo=linux&logoColor=black)
+![مجوز](https://img.shields.io/badge/مجوز-MIT-22C55E?style=for-the-badge)
 
-[English](#english) · [فارسی](#فارسی) · [Features](#features) · [Installation](#installation)
+`while (server.is_alive()) { monitor(); }`
+
+[معرفی پروژه](#معرفی-پروژه) · [قابلیت‌ها](#قابلیت‌های-پروژه) · [نصب](#نصب-و-راه‌اندازی) · [به‌روزرسانی](#به‌روزرسانی) · [امنیت](#امنیت)
 
 </div>
 
 ---
 
-<a id="english"></a>
+## معرفی پروژه
 
-## `01` / About
+**idontMonitor** پروژه‌ای برای مانیتورینگ و مدیریت وضعیت سرورهای لینوکسی و VPS است. هدف آن فراهم‌کردن بستری منظم برای مشاهده اطلاعات سیستم، دسترسی به رابط مدیریتی و توسعه ابزارهای موردنیاز مدیریت سرور است.
 
-**idontMonitor** is a server monitoring project designed to bring system visibility, operational awareness, and convenient management into one modern interface.
+ساختار پروژه بخش‌های برنامه، رابط کاربری، ترجمه‌ها، اسکریپت‌های مدیریتی، سرویس سیستم و آزمون‌ها را از یکدیگر جدا می‌کند تا نگهداری و توسعه آن آسان‌تر باشد.
 
-Built for VPS and Linux server environments, it focuses on presenting useful system information through a clean dashboard and maintaining a structured foundation for future improvements.
+> **ایده اصلی:** اطلاعات مهم سرور را شفاف‌تر ببین؛ وضعیت سرویس را بهتر بررسی کن و مدیریت را ساده‌تر انجام بده.
 
-```python
-from idontmonitor import Monitor
+## قابلیت‌های پروژه
 
-monitor = Monitor()
-monitor.observe()
-monitor.report()
-```
-
-> *Monitor the system. Understand the signals. Stay in control.*
-
-## `02` / Features
-
-- **System Monitoring** — Keep an eye on important server metrics.
-- **Modern Web Interface** — A clean, responsive dashboard.
-- **Multilingual UI** — English and Persian interface support.
-- **Theme Support** — Designed for a customizable visual experience.
-- **Update Management** — A dedicated foundation for update workflows.
-- **Linux & VPS Focused** — Built with server administration in mind.
-- **Structured Architecture** — Organized application, static assets, localization, scripts, and tests.
-
-## `03` / Tech Stack
-
-| Component | Technology |
+| قابلیت | توضیحات |
 |---|---|
-| Runtime | Python 3.10+ |
-| Interface | HTML, CSS, JavaScript |
-| Localization | JSON-based language files |
-| Deployment | Linux / systemd |
-| Testing | Python unittest |
+| 🖥️ رابط وب | رابط کاربری مبتنی بر فایل‌های وب و بخش برنامه |
+| 🌐 چندزبانه | فایل‌های ترجمه فارسی و انگلیسی |
+| 🎨 پشتیبانی از ظاهر سفارشی | ساختار فایل‌های جداگانه برای سبک رابط کاربری |
+| 🐍 مبتنی بر پایتون | وابستگی‌های پروژه از طریق فایل نیازمندی‌ها مدیریت می‌شوند |
+| ⚙️ سرویس لینوکس | فایل سرویس برای مدیریت با `systemd` |
+| 🧰 ابزار مدیریتی | اسکریپت اختصاصی مدیریت به‌روزرسانی |
+| 🧪 آزمون‌های پروژه | مجموعه آزمون‌ها برای بررسی بخش‌های مختلف |
+| 📚 مستندات | راهنمای نصب و مستندات معماری |
 
-## `04` / Installation
+> امکاناتی مانند بازیابی خودکار، مرکز به‌روزرسانی تراکنشی یا بازگشت نسخه فقط زمانی قابل اتکا هستند که پیاده‌سازی و آزمون آن‌ها در نسخه مربوطه تأیید شده باشد.
 
-Clone the repository:
+## پیش‌نیازها
+
+برای راه‌اندازی پروژه، موارد زیر را متناسب با نسخه و محیط نصب آماده کنید:
+
+- سیستم‌عامل لینوکس سازگار با اسکریپت نصب.
+- پایتون و وابستگی‌های تعریف‌شده در `requirements.txt`.
+- دسترسی لازم برای نصب سرویس سیستمی.
+- دسترسی شبکه در صورت نیاز به دریافت وابستگی‌ها یا نسخه‌های جدید.
+
+## نصب و راه‌اندازی
+
+مخزن پروژه را دریافت کنید:
 
 ```bash
 git clone https://github.com/durwinam/idontMonitor.git
 cd idontMonitor
 ```
 
-Create a virtual environment:
+محیط مجازی پایتون بسازید:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-Install dependencies:
+وابستگی‌ها را نصب کنید:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-For the supported installation workflow, review:
+برای ادامه نصب، راهنمای موجود در مخزن را مطالعه کنید:
 
 [`docs/INSTALL.md`](docs/INSTALL.md)
 
-## `05` / Project Structure
+در صورتی که می‌خواهید اسکریپت نصب را اجرا کنید، ابتدا محتوای `install.sh` را بررسی کنید و سپس آن را با سطح دسترسی موردنیاز اجرا کنید.
+
+```bash
+less install.sh
+```
+
+## به‌روزرسانی
+
+نسخه ثبت‌شده پروژه در فایل `VERSION` نگهداری می‌شود. اسکریپت مدیریتی مرتبط با به‌روزرسانی در مسیر زیر قرار دارد:
+
+```text
+scripts/idontmonitor-update
+```
+
+پیش از اجرای عملیات به‌روزرسانی، راهنمای نسخه و گزینه‌های پشتیبانی‌شده را بررسی کنید. برای جلوگیری از آسیب به نصب فعال، از اجرای دستورهای حدسی یا جایگزینی دستی فایل‌های سیستمی خودداری کنید.
+
+## ساختار پروژه
 
 ```text
 idontMonitor/
-├── app/                 # Application backend
-├── docs/                # Documentation
+├── app/                  # بخش برنامه
+├── docs/                 # مستندات و معماری
 ├── locales/
-│   ├── en/              # English translations
-│   └── fa/              # Persian translations
-├── scripts/             # Management utilities
-├── static/              # Frontend assets
-├── systemd/             # Service configuration
-├── tests/               # Automated tests
-├── install.sh
-├── requirements.txt
-├── VERSION
-└── README.md
+│   ├── en/               # ترجمه انگلیسی
+│   └── fa/               # ترجمه فارسی
+├── scripts/              # ابزارهای مدیریتی
+├── static/               # رابط کاربری و فایل‌های ظاهری
+├── systemd/              # تعریف سرویس لینوکس
+├── tests/                # آزمون‌ها
+├── install.sh            # اسکریپت نصب
+├── requirements.txt      # وابستگی‌های پایتون
+├── VERSION               # نسخه پروژه
+├── CHANGELOG.md          # تاریخچه تغییرات
+├── SECURITY.md           # راهنمای امنیت
+└── README.md             # مستندات اصلی
 ```
 
-## `06` / Version
+## آزمون و بررسی
 
-Current project version: **1.8.1**
-
-See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
-
-## `07` / Security
-
-Please do not publish credentials, API tokens, private server addresses, or sensitive configuration data in public issues.
-
-For security-related concerns, see [`SECURITY.md`](SECURITY.md).
-
-## `08` / Contributing
-
-Contributions, bug reports, and suggestions are welcome.
-
-1. Fork the repository.
-2. Create a feature branch.
-3. Make your changes and test them.
-4. Submit a pull request with a clear description.
-
-## `09` / License
-
-This project is distributed under the [MIT License](LICENSE).
-
----
-
-<a id="فارسی"></a>
-
-## `فارسی` / درباره پروژه
-
-**idontMonitor** یک ابزار مانیتورینگ سرور است که با هدف نمایش بهتر وضعیت سیستم، دسترسی سریع به اطلاعات مهم و مدیریت آسان‌تر سرورهای لینوکسی و VPS طراحی شده است.
-
-تمرکز پروژه بر رابط کاربری مدرن، پشتیبانی از زبان فارسی و انگلیسی، ساختار منظم کد و فراهم‌کردن بستری مناسب برای توسعه قابلیت‌های آینده است.
-
-### قابلیت‌ها
-
-- مانیتورینگ اطلاعات مهم سرور
-- رابط وب مدرن و واکنش‌گرا
-- پشتیبانی از فارسی و انگلیسی
-- زیرساخت پشتیبانی از پوسته‌های مختلف
-- ساختار مدیریت به‌روزرسانی
-- سازگاری با محیط‌های لینوکسی و VPS
-- ساختار تفکیک‌شده برای بک‌اند، رابط کاربری، ترجمه‌ها و تست‌ها
-
-### نصب
+برای اجرای آزمون‌های موجود، ابتدا محیط پایتون و وابستگی‌های لازم را آماده کنید. سپس آزمون‌ها را از ریشه پروژه اجرا کنید:
 
 ```bash
-git clone https://github.com/durwinam/idontMonitor.git
-cd idontMonitor
-
-python3 -m venv .venv
-source .venv/bin/activate
-
-pip install -r requirements.txt
+python -m unittest discover -s tests -v
 ```
 
-برای مشاهده مراحل نصب و راه‌اندازی، فایل [`docs/INSTALL.md`](docs/INSTALL.md) را مطالعه کنید.
+نتیجه اجرای آزمون‌ها به محیط اجرا و وابستگی‌های نصب‌شده بستگی دارد.
 
-### نسخه فعلی
+## امنیت
 
-`1.8.1`
+- پیش از نصب یا به‌روزرسانی، اسکریپت‌های مدیریتی را بررسی کنید.
+- اطلاعات ورود، توکن‌ها و اطلاعات محرمانه سرور را در مخزن عمومی قرار ندهید.
+- فایل‌های تنظیمات و داده‌های حساس را از فایل‌های عمومی پروژه جدا نگه دارید.
+- برای گزارش آسیب‌پذیری، دستورالعمل‌های `SECURITY.md` را دنبال کنید.
 
-برای مشاهده تغییرات نسخه‌ها، به فایل [`CHANGELOG.md`](CHANGELOG.md) مراجعه کنید.
+## تاریخچه نسخه‌ها
 
-### مشارکت و امنیت
+نسخه فعلی معرفی‌شده در این README برابر با `1.8.1` است.
 
-برای گزارش باگ یا پیشنهاد قابلیت جدید، از بخش Issues مخزن GitHub استفاده کنید. اطلاعات محرمانه، رمزهای عبور و توکن‌ها را در گزارش‌های عمومی قرار ندهید.
+برای مشاهده جزئیات تغییرات، فایل زیر را بررسی کنید:
+
+[مشاهده تاریخچه تغییرات](CHANGELOG.md)
+
+## مشارکت در توسعه
+
+برای گزارش خطا یا پیشنهاد قابلیت جدید، از بخش Issues مخزن استفاده کنید. در صورت ارسال تغییرات کد، توضیح تغییر و نتیجه آزمون‌های مرتبط را نیز ارائه دهید.
+
+## مجوز استفاده
+
+این پروژه تحت مجوز MIT منتشر شده است. شرایط استفاده در فایل [`LICENSE`](LICENSE) قرار دارد.
 
 ---
 
 <div align="center">
 
-**`idontMonitor`**
+<img src="static/idontmonitor-logo.png" alt="آیدونت مانیتور" width="72">
 
-`while (server.is_alive()) { monitor(); }`
+# `idontMonitor`
 
-*Observe · Analyze · Protect*
+### `monitor(); analyze(); protect();`
 
-[Repository](https://github.com/durwinam/idontMonitor) · [Issues](https://github.com/durwinam/idontMonitor/issues)
+**پایش هوشمند · دید بهتر · مدیریت ساده‌تر**
+
+[مخزن گیت‌هاب](https://github.com/durwinam/idontMonitor) · [گزارش خطا و پیشنهاد](https://github.com/durwinam/idontMonitor/issues)
 
 </div>
