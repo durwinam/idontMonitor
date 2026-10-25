@@ -1,157 +1,187 @@
+ 
 <div align="center">
 
-![لوگوی idontMonitor](static/idontmonitor-logo-full.png)
+<img src="static/idontmonitor-logo.png" width="110" alt="idontMonitor Logo">
 
-# idontMonitor
-### پنل پایش سرور، منابع سیستم و وضعیت شبکه
+# `idontMonitor`
 
-**نسخهٔ ۱.۸.۱** · توسعه‌دهنده: **durwinam**
+**`// Observe. Analyze. Protect.`**
 
-[مخزن گیت‌هاب](https://github.com/durwinam/idontMonitor) · [کانال تلگرام](https://t.me/idontproject)
+[![Version](https://img.shields.io/badge/version-1.8.1-00D4FF?style=for-the-badge&logo=semver&logoColor=white)](VERSION)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Linux-111827?style=for-the-badge&logo=linux&logoColor=white)](https://www.kernel.org/)
+[![License](https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](LICENSE)
+
+**A modern server monitoring experience, built for clarity, control, and performance.**
+
+[English](#english) · [فارسی](#فارسی) · [Features](#features) · [Installation](#installation)
 
 </div>
 
 ---
 
-## معرفی
+<a id="english"></a>
 
-`idontMonitor` یک پنل تحت وب برای مشاهدهٔ وضعیت منابع سرور، مصرف شبکه، تاریخچهٔ ترافیک، آزمون سرعت اتصال و بررسی‌های امنیتی است. این برنامه برای نصب روی سرور شخصی طراحی شده و رابط وب آن از بک‌اند برنامه داده دریافت می‌کند.
+## `01` / About
 
-## قابلیت‌ها
+**idontMonitor** is a server monitoring project designed to bring system visibility, operational awareness, and convenient management into one modern interface.
 
-- پایش مصرف پردازنده، حافظه و فضای دیسک
-- نمایش وضعیت میزبان، زمان روشن‌بودن و میانگین بار سیستم
-- مشاهدهٔ نرخ دریافت و ارسال و تاریخچهٔ ترافیک شبکه
-- آزمون سرعت خروجی سرور با انتقال واقعی و محدودشده
-- نمایش اطلاعات تأخیر، نوسان تأخیر و از دست رفتن بسته‌ها در صورت قابل‌اندازه‌گیری بودن
-- احراز هویت پنل، محدودسازی تلاش‌های ورود و ثبت رویدادهای ورود
-- تنظیمات حساب و پشتیبانی از HTTP یا HTTPS مطابق تنظیمات نصب
-- رابط واکنش‌گرا برای نمایشگرهای دسکتاپ و موبایل
-- انتخاب زبان انگلیسی یا فارسی؛ فارسی با چیدمان راست‌چین و فونت وزیرمتن
-- لینک‌های رسمی گیت‌هاب و تلگرام در پایین پنل
+Built for VPS and Linux server environments, it focuses on presenting useful system information through a clean dashboard and maintaining a structured foundation for future improvements.
 
+```python
+from idontmonitor import Monitor
 
-## مرکز به‌روزرسانی (v1.8.1)
+monitor = Monitor()
+monitor.observe()
+monitor.report()
+```
 
-در منوی **Update Center** نسخه نصب‌شده با آخرین انتشار پایدار GitHub مقایسه می‌شود. در صورت انتشار نسخه جدید، اعلان شیشه‌ای و لینک توضیحات انتشار نمایش داده می‌شود. نصب از داخل پنل، نسخه برنامه را واقعاً روی VPS ارتقا می‌دهد و صرفاً فایل‌های مرورگر را تغییر نمی‌دهد.
+> *Monitor the system. Understand the signals. Stay in control.*
 
-- برای نصب خودکار، انتشار GitHub باید شامل فایل `idontMonitor-vX.Y.Z.zip` با تگ نسخهٔ یکسان و SHA-256 digest معتبر باشد.
-- ابزار سمت سرور آرشیو و نسخه را اعتبارسنجی می‌کند، وابستگی‌ها را نصب می‌کند، نسخه فعال را به‌صورت اتمیک تغییر می‌دهد و سلامت سرویس را می‌سنجد.
-- در صورت شکست بررسی سلامت، بازگشت به نسخه قبلی تلاش می‌شود.
-- پیکربندی `/etc/idontmonitor` و داده‌های پایدار `/var/lib/idontmonitor` خارج از نسخه‌های برنامه باقی می‌مانند.
-- برای CLI: `sudo idontMonitor update-check` وضعیت نسخه را بررسی می‌کند و `sudo idontMonitor update` نصب واقعی را آغاز می‌کند.
+## `02` / Features
 
-تا زمانی که یک GitHub Release رسمی همراه ZIP و digest منتشر نشده باشد، ابزار به‌روزرسانی از نصب خودداری می‌کند.
+- **System Monitoring** — Keep an eye on important server metrics.
+- **Modern Web Interface** — A clean, responsive dashboard.
+- **Multilingual UI** — English and Persian interface support.
+- **Theme Support** — Designed for a customizable visual experience.
+- **Update Management** — A dedicated foundation for update workflows.
+- **Linux & VPS Focused** — Built with server administration in mind.
+- **Structured Architecture** — Organized application, static assets, localization, scripts, and tests.
 
-## پیش‌نیازها
+## `03` / Tech Stack
 
-- سیستم‌عامل لینوکس؛ نصب‌کننده برای محیط‌های Debian/Ubuntu تهیه شده است.
-- Python و ابزارهای لازم که نصب‌کنندهٔ پروژه بررسی یا نصب می‌کند.
-- دسترسی مدیریتی برای نصب سرویس و تنظیم وابستگی‌های سیستم.
-- دسترسی شبکه برای دریافت وابستگی‌ها و اجرای آزمون سرعت.
+| Component | Technology |
+|---|---|
+| Runtime | Python 3.10+ |
+| Interface | HTML, CSS, JavaScript |
+| Localization | JSON-based language files |
+| Deployment | Linux / systemd |
+| Testing | Python unittest |
 
-> نسخه‌های دقیق وابستگی‌ها در `requirements.txt` ثبت شده‌اند. پیش از نصب روی سرور عملیاتی، نصب‌کننده و تنظیمات محیط مقصد را بررسی کنید.
+## `04` / Installation
 
-## نصب
-
-روش نصب توصیه‌شده، استفاده از نصب‌کنندهٔ موجود در مخزن رسمی است. ابتدا مخزن را دریافت و محتوای `install.sh` را بررسی کنید؛ سپس آن را با دسترسی مدیریتی اجرا کنید.
+Clone the repository:
 
 ```bash
 git clone https://github.com/durwinam/idontMonitor.git
 cd idontMonitor
-less install.sh
-sudo bash install.sh
 ```
 
-رفتار نصب، پورت، مسیر پنل، دامنه و روش فعال‌سازی HTTPS می‌تواند به نسخهٔ نصب‌کننده وابسته باشد. هنگام نصب، مقادیر پیشنهادی را با تنظیمات محیط خود تطبیق دهید.
+Create a virtual environment:
 
-## ساختار سورس
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+For the supported installation workflow, review:
+
+[`docs/INSTALL.md`](docs/INSTALL.md)
+
+## `05` / Project Structure
 
 ```text
 idontMonitor/
-├── app/
-│   └── main.py              # برنامهٔ FastAPI، API و منطق فعلی سمت سرور
-├── static/
-│   ├── index.html           # پنل اصلی
-│   ├── login.html           # صفحهٔ ورود
-│   ├── app.js               # رفتار تعاملی رابط
-│   ├── i18n.js              # مدیریت زبان رابط
-│   ├── style.css            # استایل و واکنش‌گرایی
-│   └── ...                  # لوگوها و منابع ثابت
+├── app/                 # Application backend
+├── docs/                # Documentation
 ├── locales/
-│   ├── en/messages.json     # واژه‌نامهٔ انگلیسی
-│   └── fa/messages.json     # واژه‌نامهٔ فارسی
-├── docs/                    # مستندات نصب و معماری
-├── systemd/                 # فایل سرویس systemd
-├── tests/                   # تست‌های ساختار و واحد
-├── install.sh               # نصب‌کننده
-├── requirements.txt         # وابستگی‌های پایتون
-├── VERSION                  # نسخهٔ سورس
-├── CHANGELOG.md             # تاریخچهٔ تغییرات
-└── README.md                # همین راهنما
+│   ├── en/              # English translations
+│   └── fa/              # Persian translations
+├── scripts/             # Management utilities
+├── static/              # Frontend assets
+├── systemd/             # Service configuration
+├── tests/               # Automated tests
+├── install.sh
+├── requirements.txt
+├── VERSION
+└── README.md
 ```
 
-> این ساختار مستندکنندهٔ سورس فعلی است؛ انتقال ماژول‌های بک‌اند به لایه‌های مستقل باید مرحله‌ای و همراه با تست رگرسیون انجام شود تا منطق عملیاتی تغییر نکند.
+## `06` / Version
 
-## معماری و قواعد توسعه
+Current project version: **1.8.1**
 
-- هر فایل باید مسئولیت مشخص و قابل توضیحی داشته باشد.
-- منطق رابط کاربری، واژه‌نامه‌ها، استایل‌ها و منطق سمت سرور از یکدیگر تفکیک شوند.
-- از فرمت‌بندی استاندارد، نام‌گذاری معنادار و توابع کوتاه و قابل‌آزمون استفاده شود.
-- تنظیمات محیطی و اسرار در سورس یا مستندات عمومی قرار نگیرند.
-- تغییرات معماری باید با تست واحد، تست یکپارچگی و تست رگرسیون همراه باشند.
-- قابلیت‌های موجود، تاریخچهٔ ترافیک و تنظیمات اتصال هنگام به‌روزرسانی باید حفظ شوند.
+See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 
-## زبان فارسی و فونت وزیرمتن
+## `07` / Security
 
-زبان از انتخاب‌گر بالای پنل تغییر می‌کند. انتخاب کاربر در مرورگر نگهداری می‌شود. در حالت فارسی، جهت صفحه `RTL` و فونت `Vazirmatn` فعال می‌شود؛ در حالت انگلیسی، رابط به `LTR` برمی‌گردد. نصب‌کننده تلاش می‌کند بستهٔ فونت وزیرمتن را از مخازن توزیع نصب کرده و فایل آن را در منابع محلی پنل قرار دهد؛ در نتیجه رابط برای نمایش فارسی به Google Fonts وابسته نیست.
+Please do not publish credentials, API tokens, private server addresses, or sensitive configuration data in public issues.
 
-## اجرای تست‌ها
+For security-related concerns, see [`SECURITY.md`](SECURITY.md).
 
-در پوشهٔ ریشهٔ پروژه اجرا کنید:
+## `08` / Contributing
+
+Contributions, bug reports, and suggestions are welcome.
+
+1. Fork the repository.
+2. Create a feature branch.
+3. Make your changes and test them.
+4. Submit a pull request with a clear description.
+
+## `09` / License
+
+This project is distributed under the [MIT License](LICENSE).
+
+---
+
+<a id="فارسی"></a>
+
+## `فارسی` / درباره پروژه
+
+**idontMonitor** یک ابزار مانیتورینگ سرور است که با هدف نمایش بهتر وضعیت سیستم، دسترسی سریع به اطلاعات مهم و مدیریت آسان‌تر سرورهای لینوکسی و VPS طراحی شده است.
+
+تمرکز پروژه بر رابط کاربری مدرن، پشتیبانی از زبان فارسی و انگلیسی، ساختار منظم کد و فراهم‌کردن بستری مناسب برای توسعه قابلیت‌های آینده است.
+
+### قابلیت‌ها
+
+- مانیتورینگ اطلاعات مهم سرور
+- رابط وب مدرن و واکنش‌گرا
+- پشتیبانی از فارسی و انگلیسی
+- زیرساخت پشتیبانی از پوسته‌های مختلف
+- ساختار مدیریت به‌روزرسانی
+- سازگاری با محیط‌های لینوکسی و VPS
+- ساختار تفکیک‌شده برای بک‌اند، رابط کاربری، ترجمه‌ها و تست‌ها
+
+### نصب
 
 ```bash
-python -m compileall -q app
-node --check static/app.js
-node --check static/i18n.js
-python tests/test_syntax.py
-python tests/test_units.py
+git clone https://github.com/durwinam/idontMonitor.git
+cd idontMonitor
+
+python3 -m venv .venv
+source .venv/bin/activate
+
+pip install -r requirements.txt
 ```
 
-## عیب‌یابی سرویس
+برای مشاهده مراحل نصب و راه‌اندازی، فایل [`docs/INSTALL.md`](docs/INSTALL.md) را مطالعه کنید.
 
-نام سرویس و مسیر نصب ممکن است در محیط‌های مختلف تفاوت داشته باشد. از نام سرویس نمایش‌داده‌شده در نصب‌کننده استفاده کنید. برای سرویس systemd با نام `idontmonitor`، دستورهای معمول عبارت‌اند از:
+### نسخه فعلی
 
-```bash
-sudo systemctl status idontmonitor
-sudo systemctl restart idontmonitor
-sudo journalctl -u idontmonitor -n 100 --no-pager
-```
+`1.8.1`
 
-## امنیت و نگهداری
+برای مشاهده تغییرات نسخه‌ها، به فایل [`CHANGELOG.md`](CHANGELOG.md) مراجعه کنید.
 
-- گذرواژه، کلید نشست، فایل پیکربندی و داده‌های تاریخچه را منتشر نکنید.
-- پیش از ارتقا، از پیکربندی و داده‌های پایدار نسخهٔ پشتیبان تهیه کنید.
-- اسکریپت نصب و به‌روزرسانی را پیش از اجرا بررسی کنید.
-- آزمون سرعت، ترافیک واقعی مصرف می‌کند و نتایج آن به مسیر شبکه و نقطهٔ پایانی وابسته است.
-- نتیجهٔ تست در محیط توسعه به‌تنهایی اثبات‌کنندهٔ عملکرد روی VPS مقصد نیست.
+### مشارکت و امنیت
 
-## مشارکت در توسعه
-
-۱. مخزن را Fork کنید.
-۲. برای تغییر خود یک شاخهٔ مستقل بسازید.
-۳. قالب‌بندی و تست‌های مرتبط را اجرا کنید.
-۴. در توضیح درخواست ادغام، رفتار تغییرکرده و نتیجهٔ تست‌ها را بنویسید.
-
-## لینک‌ها و مالکیت
-
-- GitHub: https://github.com/durwinam/idontMonitor
-- Telegram: https://t.me/idontproject
+برای گزارش باگ یا پیشنهاد قابلیت جدید، از بخش Issues مخزن GitHub استفاده کنید. اطلاعات محرمانه، رمزهای عبور و توکن‌ها را در گزارش‌های عمومی قرار ندهید.
 
 ---
 
 <div align="center">
 
-**© 2026 durwinam — تمامی حقوق محفوظ است.**
+**`idontMonitor`**
+
+`while (server.is_alive()) { monitor(); }`
+
+*Observe · Analyze · Protect*
+
+[Repository](https://github.com/durwinam/idontMonitor) · [Issues](https://github.com/durwinam/idontMonitor/issues)
 
 </div>
