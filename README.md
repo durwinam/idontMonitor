@@ -11,6 +11,8 @@
 ![Python](https://img.shields.io/badge/Python-3.x-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Linux](https://img.shields.io/badge/Operating%20System-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)
 ![License](https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge)
+*
+
 **پایش · تحلیل · مدیریت**
 
 [معرفی](#معرفی) · [قابلیت‌ها](#قابلیتهای-پروژه) · [نصب](#نصب-سریع) · [مدیریت](#مدیریت-با-خط-فرمان) · [به‌روزرسانی](#بهروزرسانی)
