@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
-VERSION="1.9.9"
+VERSION="2.0.0"
 REPO_URL="https://github.com/durwinam/idontMonitor"
 INSTALL_DIR="/opt/idontmonitor"
 CONFIG_DIR="/etc/idontmonitor"
@@ -321,7 +321,7 @@ find "$INSTALL_DIR/releases/$VERSION" -type f -exec chmod 0644 {} +
 install -m 0644 "$INSTALL_DIR/current/systemd/idontmonitor.service" /etc/systemd/system/idontmonitor.service
 # Install a fixed root-owned updater. The web process can invoke only the `apply` action.
 install -o root -g root -m 0750 "$INSTALL_DIR/current/scripts/idontmonitor-update" /usr/local/sbin/idontmonitor-update
-printf '%s\n' 'idontmonitor ALL=(root) NOPASSWD: /usr/local/sbin/idontmonitor-update apply' > /etc/sudoers.d/idontmonitor-update
+printf '%s\n' 'idontmonitor ALL=(root) NOPASSWD: /usr/local/sbin/idontmonitor-update apply, /usr/local/sbin/idontmonitor-update apply-main' > /etc/sudoers.d/idontmonitor-update
 chmod 0440 /etc/sudoers.d/idontmonitor-update
 visudo -cf /etc/sudoers.d/idontmonitor-update >/dev/null || fail "Invalid update sudo policy."
 
@@ -409,7 +409,7 @@ set -uo pipefail
 CONFIG=/etc/idontmonitor/config.json
 ENV_FILE=/etc/idontmonitor/environment
 STATE=/var/lib/idontmonitor/install-mode
-VERSION="1.9.9"
+VERSION="2.0.0"
 
 pause(){ read -r -p 'Press Enter to continue...' _ || true; }
 line(){ printf '%s\n' '------------------------------------------------------------'; }
@@ -418,7 +418,7 @@ update_check(){
   now=$(date +%s); cached_at=0; latest=''
   if [[ -r "$cache" ]]; then read -r cached_at latest < "$cache" || true; fi
   if [[ ! "$cached_at" =~ ^[0-9]+$ ]] || (( now-cached_at > 900 )) || [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    latest=$(curl -fsSL --connect-timeout 2 --max-time 4 -H 'Accept: application/vnd.github+json' -H 'User-Agent: idontMonitor-CLI/1.9.9' "https://api.github.com/repos/durwinam/idontMonitor/releases/latest" 2>/dev/null | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("tag_name", "")).lstrip("v"))' 2>/dev/null || true)
+    latest=$(curl -fsSL --connect-timeout 2 --max-time 4 -H 'Accept: application/vnd.github+json' -H 'User-Agent: idontMonitor-CLI/2.0.0' "https://api.github.com/repos/durwinam/idontMonitor/releases/latest" 2>/dev/null | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("tag_name", "")).lstrip("v"))' 2>/dev/null || true)
     if [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then printf '%s %s\n' "$now" "$latest" > "$cache" 2>/dev/null || true; else latest=''; fi
   fi
   if [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$(printf '%s\n%s\n' "$VERSION" "$latest" | sort -V | tail -1)" == "$latest" ]] && [[ "$latest" != "$VERSION" ]]; then
@@ -573,7 +573,7 @@ panel_menu(){
       4) journalctl -u idontmonitor -n 100 --no-pager; pause;;
       5) echo "Port changes require updating the service environment and, for HTTPS, the reverse-proxy config."; echo "This release intentionally does not apply a partial port change from CLI."; echo "Use the verified installer/upgrade workflow after a config backup."; pause;;
       6) echo "Entry IP/domain is installer metadata. Changing it does not change DNS or firewall rules."; echo "For HTTPS, use a domain with valid DNS and the Caddy TLS workflow."; pause;;
-      7) echo "Custom URL paths, SSL toggling, and access-control management are not implemented in v1.9.9."; echo "No configuration was changed."; pause;;
+      7) echo "Custom URL paths, SSL toggling, and access-control management are not implemented in v2.0.0."; echo "No configuration was changed."; pause;;
       8) reset_panel_password;;
       9) update_check; echo "To install a verified update, run: sudo idontMonitor update"; pause;;
       0) return;;
@@ -617,6 +617,11 @@ case "${1:-menu}" in
     if [[ ! -x /usr/local/sbin/idontmonitor-update ]]; then echo "Update helper is missing. Upgrade with the official installer first."; exit 2; fi
     echo "Checking GitHub release and installing the verified update on this VPS..."
     exec /usr/local/sbin/idontmonitor-update apply;;
+  update-main)
+    if [[ $EUID -ne 0 ]]; then echo "Run: sudo idontMonitor update-main"; exit 1; fi
+    if [[ ! -x /usr/local/sbin/idontmonitor-update ]]; then echo "Update helper is missing. Upgrade with the official installer first."; exit 2; fi
+    echo "Checking the GitHub main branch and installing a newer version if available..."
+    exec /usr/local/sbin/idontmonitor-update apply-main;;
   menu)
     while true; do
       banner

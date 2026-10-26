@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.0.0
+- Release-based updater now uses the GitHub release tag source archive (`tar.gz`) instead of requiring a ZIP asset.
+- Added an explicit main-branch update path for development builds.
+- Improved version consistency across source, installer, CLI, and release metadata.
+- Kept safe port selection on fresh install and preserved existing port during upgrades.
+
+
 ## 1.9.9
 - Added BackPack native metrics snapshot reader for per-instance `bytes_in` / `bytes_out` where snapshots are present beside recognized configuration paths.
 - Added C-Tunnel interface mapping based on its source-defined `ct-<name>` device naming.

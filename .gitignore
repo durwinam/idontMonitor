@@ -1,8 +1,7 @@
-.env
-.venv/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
 *.log
-config.json
-secrets/
-backups/
