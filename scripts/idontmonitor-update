@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Root-owned, constrained GitHub release updater for idontMonitor."""
-import hashlib, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.request, zipfile
+"""Safe GitHub-tag/main updater for idontMonitor; never requires a ZIP asset."""
+import hashlib, json, os, re, shutil, subprocess, sys, tarfile, tempfile, time, urllib.request
 from pathlib import Path
 
 ROOT = Path('/opt/idontmonitor')
@@ -9,6 +9,10 @@ RELEASES = ROOT / 'releases'
 STATUS = Path('/var/lib/idontmonitor/update-status.json')
 REPO = 'durwinam/idontMonitor'
 SERVICE = 'idontmonitor'
+MAX_ARCHIVE = 80 * 1024 * 1024
+REQUIRED = ['VERSION','app/main.py','app/ops.py','static/index.html','static/operations.js',
+            'requirements.txt','install.sh','systemd/idontmonitor.service',
+            'scripts/idontmonitor-update','scripts/idontmonitor-ops']
 
 def status(state, message, **extra):
     STATUS.parent.mkdir(parents=True, exist_ok=True)
@@ -20,127 +24,158 @@ def status(state, message, **extra):
     except Exception: pass
     os.replace(tmp, STATUS)
 
-def request(url, limit=30 * 1024 * 1024):
-    req = urllib.request.Request(url, headers={'User-Agent':'idontMonitor-Updater/1.9.5','Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'})
-    with urllib.request.urlopen(req, timeout=30) as r:
+def request(url, limit=MAX_ARCHIVE):
+    req = urllib.request.Request(url, headers={
+        'User-Agent': 'idontMonitor-Updater/2.0.0',
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28'})
+    with urllib.request.urlopen(req, timeout=45) as r:
         data = r.read(limit + 1)
     if len(data) > limit: raise RuntimeError('Download exceeds configured size limit')
     return data
 
 def version_tuple(value):
     m = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', str(value or '').strip())
-    if not m: raise RuntimeError('Release version must be a stable semantic version (x.y.z)')
+    if not m: raise RuntimeError('Version must be a stable semantic version (x.y.z)')
     return tuple(map(int, m.groups()))
+
+def current_version():
+    p = CURRENT / 'VERSION'
+    if not p.is_file(): raise RuntimeError('Current release VERSION file is missing')
+    return p.read_text(encoding='utf-8').strip()
 
 def healthcheck():
     try:
         env = {}
         for line in Path('/etc/idontmonitor/environment').read_text().splitlines():
             if '=' in line and not line.lstrip().startswith('#'):
-                k,v=line.split('=',1); env[k.strip()]=v.strip().strip('"\'')
-        host=env.get('IDM_BIND_HOST','127.0.0.1'); port=int(env.get('IDM_APP_PORT','8088'))
+                k, v = line.split('=', 1); env[k.strip()] = v.strip().strip('"\'')
+        port = int(env.get('IDM_APP_PORT', '8088'))
         try:
-            cfg=json.loads(Path('/etc/idontmonitor/config.json').read_text())
-            allowed=cfg.get('allowed_hosts') or []
-            host_header=next((x for x in allowed if x not in ('*','localhost') and not x.startswith('*.')), 'localhost')
-        except Exception: host_header='localhost'
-        url=f'http://127.0.0.1:{port}/healthz'
-        req=urllib.request.Request(url,headers={'Host':host_header,'User-Agent':'idontMonitor-Healthcheck'})
-        with urllib.request.urlopen(req,timeout=5) as r:
-            data=json.loads(r.read(4096).decode())
+            cfg = json.loads(Path('/etc/idontmonitor/config.json').read_text())
+            allowed = cfg.get('allowed_hosts') or []
+            host_header = next((x for x in allowed if x not in ('*','localhost') and not x.startswith('*.')), 'localhost')
+        except Exception: host_header = 'localhost'
+        req = urllib.request.Request(f'http://127.0.0.1:{port}/healthz', headers={'Host':host_header,'User-Agent':'idontMonitor-Healthcheck'})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read(4096).decode())
             return r.status == 200 and data.get('ok') is True
     except Exception: return False
 
-def apply():
+def safe_extract(payload, work):
+    archive = work / 'source.tar.gz'
+    archive.write_bytes(payload)
+    stage = work / 'unpacked'; stage.mkdir()
+    with tarfile.open(archive, 'r:gz') as tf:
+        members = tf.getmembers()
+        if not members: raise RuntimeError('Downloaded tar.gz archive is empty')
+        for m in members:
+            path = Path(m.name)
+            if path.is_absolute() or '..' in path.parts or m.issym() or m.islnk() or m.isdev():
+                raise RuntimeError('Unsafe path or link detected in source archive')
+            if m.size > MAX_ARCHIVE: raise RuntimeError('Archive member exceeds size limit')
+        # Extract only regular files/directories after path validation; links are rejected above.
+        tf.extractall(stage, members=members)
+    candidates = [p for p in stage.iterdir() if p.is_dir()]
+    if len(candidates) == 1 and (candidates[0] / 'VERSION').is_file(): source = candidates[0]
+    elif (stage / 'VERSION').is_file(): source = stage
+    else:
+        roots = [p.parent for p in stage.rglob('VERSION') if (p.parent / 'app/main.py').is_file()]
+        if len(roots) != 1: raise RuntimeError('Archive does not contain one identifiable project root')
+        source = roots[0]
+    missing = [x for x in REQUIRED if not (source / x).is_file()]
+    if missing: raise RuntimeError('Source archive is incomplete: ' + ', '.join(missing))
+    return source
+
+def release_source():
+    release = json.loads(request(f'https://api.github.com/repos/{REPO}/releases/latest', 1024*1024).decode())
+    if release.get('draft') or release.get('prerelease'): raise RuntimeError('Refusing draft or prerelease release')
+    tag = str(release.get('tag_name', ''))
+    ver = tag.lstrip('v')
+    version_tuple(ver)
+    url = release.get('tarball_url') or f'https://api.github.com/repos/{REPO}/tarball/refs/tags/{tag}'
+    return ver, url, release.get('html_url')
+
+def main_source():
+    api = json.loads(request(f'https://api.github.com/repos/{REPO}/commits/main', 1024*1024).decode())
+    sha = str((api.get('sha') or '')[:12])
+    if not re.fullmatch(r'[0-9a-f]{7,12}', sha): raise RuntimeError('Could not resolve the main branch commit')
+    return None, f'https://api.github.com/repos/{REPO}/tarball/{api["sha"]}', f'https://github.com/{REPO}/tree/main', sha
+
+def apply(mode):
     old_target = os.readlink(CURRENT) if CURRENT.is_symlink() else None
-    if not old_target or not (ROOT / old_target).is_dir():
-        raise RuntimeError('Current release symlink is missing or invalid; refusing update')
-    old_version = (CURRENT / 'VERSION').read_text().strip()
-    status('checking', 'Verifying latest stable GitHub release', current_version=old_version)
-    release=json.loads(request(f'https://api.github.com/repos/{REPO}/releases/latest', 1024*1024).decode())
-    if release.get('draft') or release.get('prerelease'): raise RuntimeError('Refusing draft or prerelease build')
-    tag=str(release.get('tag_name',''))
-    if version_tuple(tag) <= version_tuple(old_version):
-        status('current','This installation is already up to date.',current_version=old_version,latest_version=tag.lstrip('v'))
-        return
-    assets=release.get('assets') or []
-    candidates=[a for a in assets if re.fullmatch(r'idontMonitor-v\d+\.\d+\.\d+\.zip',str(a.get('name','')))]
-    asset=next((a for a in candidates if version_tuple(re.search(r'v(\d+\.\d+\.\d+)',a['name']).group(1))==version_tuple(tag)),None)
-    if not asset: raise RuntimeError('Release has no matching idontMonitor version ZIP asset; no files were changed')
-    digest=asset.get('digest') or ''
-    if not digest.startswith('sha256:'): raise RuntimeError('Release asset has no trusted SHA-256 digest; refusing to install')
-    status('downloading','Downloading and verifying release asset',current_version=old_version,latest_version=tag.lstrip('v'),release_url=release.get('html_url'))
-    payload=request(asset['browser_download_url'])
-    actual='sha256:'+hashlib.sha256(payload).hexdigest()
-    if actual.lower()!=digest.lower(): raise RuntimeError('SHA-256 verification failed; no files were changed')
-    with tempfile.TemporaryDirectory(prefix='idm-update-',dir='/var/tmp') as td:
-        archive=Path(td)/'release.zip'; archive.write_bytes(payload)
-        stage=Path(td)/'unpacked'; stage.mkdir()
-        with zipfile.ZipFile(archive) as z:
-            names=z.namelist()
-            if not names or any(Path(n).is_absolute() or '..' in Path(n).parts for n in names): raise RuntimeError('Unsafe archive paths detected')
-            z.extractall(stage)
-        dirs=[p for p in stage.iterdir() if p.is_dir()]
-        source=dirs[0] if len(dirs)==1 else stage
-        expected=tag.lstrip('v')
-        required=['VERSION','app/main.py','app/ops.py','static/index.html','static/operations.js','requirements.txt','install.sh','systemd/idontmonitor.service','scripts/idontmonitor-update','scripts/idontmonitor-ops']
-        if any(not (source/x).is_file() for x in required): raise RuntimeError('Release archive is incomplete; required files are missing')
-        new_version=(source/'VERSION').read_text().strip()
-        if new_version != expected: raise RuntimeError('Release tag and bundled VERSION do not match')
-        # Syntax-check before activation. Keep config, environment, traffic and history outside releases.
+    if not old_target or not (ROOT / old_target).is_dir(): raise RuntimeError('Current release symlink is missing or invalid; refusing update')
+    old_version = current_version()
+    status('checking', 'Checking GitHub source and version', current_version=old_version, source=mode)
+    if mode == 'release':
+        new_version, url, release_url = release_source(); source_label = 'release tag'
+    else:
+        _, url, release_url, commit = main_source(); new_version = None; source_label = f'main ({commit})'
+    payload = request(url)
+    digest = hashlib.sha256(payload).hexdigest()
+    with tempfile.TemporaryDirectory(prefix='idm-update-', dir='/var/tmp') as td:
+        work = Path(td)
+        source = safe_extract(payload, work)
+        bundled_version = (source / 'VERSION').read_text(encoding='utf-8').strip()
+        version_tuple(bundled_version)
+        if mode == 'release' and version_tuple(bundled_version) != version_tuple(new_version):
+            raise RuntimeError('Release tag and bundled VERSION do not match')
+        new_version = bundled_version
+        if version_tuple(new_version) <= version_tuple(old_version):
+            status('current', 'No newer version is available; no files were changed.', current_version=old_version, latest_version=new_version, source=source_label)
+            return
+        status('downloading', 'Source downloaded; validating archive and version', current_version=old_version, latest_version=new_version, source=source_label, sha256=digest)
         subprocess.run(['/usr/bin/python3','-m','py_compile',str(source/'app/main.py'),str(source/'app/ops.py')],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
-        dest=RELEASES/new_version
+        dest = RELEASES / new_version
         if dest.exists(): shutil.rmtree(dest)
-        shutil.copytree(source,dest,symlinks=False)
-        # Preserve the bundled local font across releases when the release archive omits it.
-        old_font=CURRENT/'static/fonts/Vazirmatn-Regular.ttf'
-        new_font=dest/'static/fonts/Vazirmatn-Regular.ttf'
-        if old_font.is_file() and not new_font.exists():
-            new_font.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(old_font,new_font)
+        shutil.copytree(source, dest, symlinks=False, ignore=shutil.ignore_patterns('__pycache__','.pytest_cache','*.pyc'))
+        old_font = CURRENT / 'static/fonts/Vazirmatn-Regular.ttf'; new_font = dest / 'static/fonts/Vazirmatn-Regular.ttf'
+        if old_font.is_file() and not new_font.exists(): new_font.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(old_font,new_font)
         for p in dest.rglob('*'):
-            if p.is_dir(): os.chmod(p,0o755)
-            elif p.is_file(): os.chmod(p,0o644)
-        os.chown(dest,0,0)
-        for p in dest.rglob('*'):
+            os.chmod(p, 0o755 if p.is_dir() or p.name in ('install.sh','idontmonitor-update','idontmonitor-ops') else 0o644)
             try: os.chown(p,0,0)
             except OSError: pass
-        # Stage the restricted operations helper and sudoers policy before activation.
-        # The helper validates every action/target itself; sudoers never grants a shell.
-        helper_tmp=Path('/usr/local/sbin/.idontmonitor-ops.new')
-        shutil.copy2(dest/'scripts/idontmonitor-ops', helper_tmp)
-        os.chown(helper_tmp,0,0); os.chmod(helper_tmp,0o750)
-        sudoers_tmp=Path('/etc/sudoers.d/.idontmonitor-ops.new')
+        os.chown(dest,0,0)
+        # Validate sudo policy before switching active release.
+        helper_tmp = Path('/usr/local/sbin/.idontmonitor-ops.new')
+        shutil.copy2(dest/'scripts/idontmonitor-ops', helper_tmp); os.chown(helper_tmp,0,0); os.chmod(helper_tmp,0o750)
+        sudoers_tmp = Path('/etc/sudoers.d/.idontmonitor-ops.new')
         sudoers_tmp.write_text('idontmonitor ALL=(root) NOPASSWD: /usr/local/sbin/idontmonitor-ops *\n',encoding='utf-8')
         os.chown(sudoers_tmp,0,0); os.chmod(sudoers_tmp,0o440)
-        check=subprocess.run(['/usr/sbin/visudo','-cf',str(sudoers_tmp)],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
-        if check.returncode != 0:
-            helper_tmp.unlink(missing_ok=True); sudoers_tmp.unlink(missing_ok=True)
-            raise RuntimeError('Restricted operations sudoers policy failed validation; release not activated')
-        os.replace(helper_tmp,'/usr/local/sbin/idontmonitor-ops')
-        os.replace(sudoers_tmp,'/etc/sudoers.d/idontmonitor-ops')
-        status('installing','Preparing runtime dependencies and switching release',current_version=old_version,latest_version=new_version,release_url=release.get('html_url'))
-        # Install dependencies before changing the active symlink.
+        check = subprocess.run(['/usr/sbin/visudo','-cf',str(sudoers_tmp)],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        if check.returncode:
+            helper_tmp.unlink(missing_ok=True); sudoers_tmp.unlink(missing_ok=True); shutil.rmtree(dest,ignore_errors=True)
+            raise RuntimeError('Restricted operations sudoers policy failed validation')
+        os.replace(helper_tmp,'/usr/local/sbin/idontmonitor-ops'); os.replace(sudoers_tmp,'/etc/sudoers.d/idontmonitor-ops')
+        status('installing','Installing dependencies and activating validated source',current_version=old_version,latest_version=new_version,source=source_label,sha256=digest)
         subprocess.run([str(ROOT/'venv/bin/pip'),'install','--disable-pip-version-check','--no-cache-dir','-r',str(dest/'requirements.txt')],check=True,timeout=300)
-        new_link=ROOT/'current.new'; new_link.unlink(missing_ok=True); new_link.symlink_to(dest)
-        os.replace(new_link,CURRENT)
-        subprocess.run(['systemctl','daemon-reload'],check=True,timeout=20)
-        subprocess.run(['systemctl','restart',SERVICE],check=True,timeout=60)
+        new_link = ROOT/'current.new'; new_link.unlink(missing_ok=True); new_link.symlink_to(dest); os.replace(new_link,CURRENT)
+        try:
+            subprocess.run(['systemctl','daemon-reload'],check=True,timeout=20)
+            subprocess.run(['systemctl','restart',SERVICE],check=True,timeout=60)
+        except Exception:
+            rollback(old_target, old_version, new_version)
+            raise
         time.sleep(2)
         if not healthcheck():
-            status('rollback','Health check failed; restoring previous release',current_version=old_version,failed_version=new_version)
-            rollback=ROOT/'current.rollback'; rollback.unlink(missing_ok=True); rollback.symlink_to(old_target); os.replace(rollback,CURRENT)
-            subprocess.run(['systemctl','restart',SERVICE],check=False,timeout=60)
-            if not healthcheck(): raise RuntimeError('Update failed and automatic rollback was attempted; service health still needs attention')
-            status('failed','Update failed health check; previous release restored',current_version=old_version,failed_version=new_version)
-            raise RuntimeError('Health check failed; previous version restored')
-        status('success','Update installed successfully on this VPS',current_version=new_version,previous_version=old_version,latest_version=new_version,release_url=release.get('html_url'),completed_at=int(time.time()))
+            rollback(old_target, old_version, new_version)
+            raise RuntimeError('Health check failed; previous release was restored')
+        status('success','Update installed and health check passed',current_version=new_version,previous_version=old_version,latest_version=new_version,release_url=release_url,source=source_label,sha256=digest,completed_at=int(time.time()))
+
+def rollback(old_target, old_version, failed_version):
+    status('rollback','Health/startup check failed; restoring previous release',current_version=old_version,failed_version=failed_version)
+    link=ROOT/'current.rollback'; link.unlink(missing_ok=True); link.symlink_to(old_target); os.replace(link,CURRENT)
+    subprocess.run(['systemctl','restart',SERVICE],check=False,timeout=60)
+    if healthcheck(): status('failed','Update failed; previous release restored',current_version=old_version,failed_version=failed_version)
+    else: status('rollback_warning','Previous release selected but health check still fails',current_version=old_version,failed_version=failed_version)
 
 def main():
     if os.geteuid()!=0: raise SystemExit('Must run as root')
-    if len(sys.argv)!=2 or sys.argv[1]!='apply': raise SystemExit('Usage: idontmonitor-update apply')
-    try: apply()
+    if len(sys.argv)!=2 or sys.argv[1] not in ('apply','apply-main'): raise SystemExit('Usage: idontmonitor-update apply|apply-main')
+    mode = 'release' if sys.argv[1]=='apply' else 'main'
+    try: apply(mode)
     except Exception as exc:
-        try: status('failed',str(exc)[:500])
+        try: status('failed',str(exc)[:500],source=mode)
         except Exception: pass
         raise SystemExit(str(exc))
 if __name__=='__main__': main()
