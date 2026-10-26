@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Root-owned narrow helper. Never evaluate input as shell code.
+set -Eeuo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH LANG=C
+TUNNEL_RE='^(ctunnel@[A-Za-z0-9_.@-]+|ctunnel-engine@[A-Za-z0-9_.@-]+|backpack-[A-Za-z0-9_.@-]+|paqet(-[A-Za-z0-9_.@-]+)?)\.service$'
+SERVICE_RE='^[A-Za-z0-9_.@:-]{1,128}\.service$'
+case "${1-}" in
+  restart-tunnel)
+    [[ $# -eq 2 && "$2" =~ $TUNNEL_RE ]] || { echo 'rejected tunnel unit' >&2; exit 2; }
+    systemctl restart "$2"
+    systemctl --quiet is-active "$2" || { echo "unit did not become active: $2" >&2; exit 3; }
+    printf 'Restarted and active: %s\n' "$2"
+    ;;
+  delete-tunnel)
+    [[ $# -eq 2 && "$2" =~ $TUNNEL_RE ]] || { echo 'rejected tunnel unit' >&2; exit 2; }
+    unit="$2"
+    case "$unit" in
+      backpack-monitor.service|backpack-webui.service|backpack-proxy.service|paqet-relay.service|paqet-auto-reset.service|paqet-tunnel.service)
+        echo 'management/relay services cannot be deleted as tunnel instances' >&2; exit 2;;
+    esac
+    unit_file="/etc/systemd/system/$unit"
+    [[ -f "$unit_file" && ! -L "$unit_file" ]] || { echo 'only a regular custom unit file may be removed' >&2; exit 2; }
+    systemctl stop "$unit" || true
+    systemctl disable "$unit" || true
+    rm -- "$unit_file"
+    systemctl daemon-reload
+    printf 'Removed custom unit %s; tunnel configuration/data were preserved.
+' "$unit"
+    ;;
+  service)
+    [[ $# -eq 2 && "$2" =~ ^(start|restart):([A-Za-z0-9_.@:-]{1,128}\.service)$ ]] || { echo 'rejected service action' >&2; exit 2; }
+    action="${2%%:*}"; unit="${2#*:}"
+    [[ "$unit" != idontmonitor.service && "$unit" =~ $SERVICE_RE ]] || { echo 'rejected service unit' >&2; exit 2; }
+    # Do not let this helper manage arbitrary host services, even with valid syntax.
+    case "$unit" in
+      ctunnel@*.service|ctunnel-engine@*.service|paqet-[A-Za-z0-9_.@-]*.service|paqet.service|backpack-[A-Za-z0-9_.@-]*.service) ;;
+      ssh.service|sshd.service|fail2ban.service|ufw.service|caddy.service) ;;
+      *) echo 'service is outside the management allowlist' >&2; exit 2;;
+    esac
+    case "$unit" in
+      backpack-monitor.service|backpack-webui.service|backpack-proxy.service|paqet-relay.service|paqet-auto-reset.service|paqet-tunnel.service)
+        echo 'management/relay services are not eligible for service actions' >&2; exit 2;;
+    esac
+    systemctl "$action" "$unit"
+    printf '%s requested for %s\n' "$action" "$unit"
+    ;;
+  *) echo 'unsupported operation' >&2; exit 2;;
+esac
