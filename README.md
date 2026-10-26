@@ -53,9 +53,7 @@
 برای دریافت و اجرای نصب‌کننده از مخزن رسمی:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/durwinam/idontMonitor/main/install.sh -o install.sh
-less install.sh
-sudo bash install.sh
+sudo bash -c "$(curl -sL https://raw.githubusercontent.com/durwinam/idontMonitor/main/install.sh)"
 ```
 
 این روش به شما اجازه می‌دهد پیش از اجرای اسکریپت با دسترسی مدیریتی، محتوای آن را بررسی کنید.
