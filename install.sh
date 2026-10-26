@@ -1,52 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
-
-# Support both direct execution from the project directory and remote execution
-# through: bash -c "$(curl .../install.sh)"
-SCRIPT_SOURCE="${BASH_SOURCE[0]-}"
-SCRIPT_DIR=""
-if [[ -n "$SCRIPT_SOURCE" && "$SCRIPT_SOURCE" != "bash" && -f "$SCRIPT_SOURCE" ]]; then
-  SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)"
-fi
-
-if [[ -z "$SCRIPT_DIR" || ! -f "$SCRIPT_DIR/app/main.py" ]]; then
-  if [[ $EUID -ne 0 ]]; then
-    echo "Run as root: sudo bash install.sh" >&2
-    exit 1
-  fi
-  command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required." >&2; exit 1; }
-  command -v tar >/dev/null 2>&1 || { echo "ERROR: tar is required." >&2; exit 1; }
-
-  REPOSITORY="durwinam/idontMonitor"
-  BRANCH="main"
-  TEMP_DIR="$(mktemp -d -t idontmonitor-install.XXXXXX)"
-  trap 'rm -rf -- "$TEMP_DIR"' EXIT
-
-  echo "[idontMonitor] Downloading project source..."
-  curl -fLsS --retry 3 \
-    "https://github.com/${REPOSITORY}/archive/refs/heads/${BRANCH}.tar.gz" \
-    -o "$TEMP_DIR/source.tar.gz" || {
-      echo "ERROR: Failed to download the project archive." >&2
-      exit 1
-    }
-
-  mkdir -p "$TEMP_DIR/source"
-  tar -xzf "$TEMP_DIR/source.tar.gz" -C "$TEMP_DIR/source" --strip-components=1 || {
-    echo "ERROR: The downloaded project archive is invalid." >&2
-    exit 1
-  }
-
-  [[ -f "$TEMP_DIR/source/app/main.py" && -f "$TEMP_DIR/source/install.sh" ]] || {
-    echo "ERROR: Required project files are missing from the archive." >&2
-    exit 1
-  }
-
-  bash "$TEMP_DIR/source/install.sh" "$@"
-  exit $?
-fi
-
-VERSION="1.8.1"
+VERSION="1.9.9"
 REPO_URL="https://github.com/durwinam/idontMonitor"
 INSTALL_DIR="/opt/idontmonitor"
 CONFIG_DIR="/etc/idontmonitor"
@@ -55,6 +10,32 @@ LOG_DIR="/var/log/idontmonitor"
 SERVICE="idontmonitor"
 
 if [[ $EUID -ne 0 ]]; then echo "Run as root: sudo bash install.sh" >&2; exit 1; fi
+# Support both a local extracted project and the documented remote `bash -c` bootstrap.
+# BASH_SOURCE[0] can be empty in bash -c, so never expand it under `set -u` without a default.
+SCRIPT_SOURCE="${BASH_SOURCE[0]-}"
+SCRIPT_DIR=""
+if [[ -n "$SCRIPT_SOURCE" && -f "$SCRIPT_SOURCE" ]]; then
+  SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)"
+elif [[ -f "$PWD/app/main.py" && -f "$PWD/install.sh" ]]; then
+  SCRIPT_DIR="$PWD"
+fi
+if [[ -z "$SCRIPT_DIR" || ! -f "$SCRIPT_DIR/app/main.py" ]]; then
+  command -v apt-get >/dev/null || { echo "ERROR: This installer supports Debian/Ubuntu (apt) only." >&2; exit 1; }
+  if ! command -v curl >/dev/null 2>&1; then
+    apt-get update -qq || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates || { echo "ERROR: curl could not be installed for bootstrap." >&2; exit 1; }
+  fi
+  BOOTSTRAP_DIR="$(mktemp -d /tmp/idontmonitor-bootstrap.XXXXXX)"
+  cleanup_bootstrap(){ rm -rf "$BOOTSTRAP_DIR"; }
+  trap cleanup_bootstrap EXIT
+  ARCHIVE="$BOOTSTRAP_DIR/source.tar.gz"
+  curl -fsSL --retry 3 --connect-timeout 10 "$REPO_URL/archive/refs/heads/main.tar.gz" -o "$ARCHIVE" || { echo "ERROR: Could not download the idontMonitor source archive. Check DNS/network access." >&2; exit 1; }
+  tar -xzf "$ARCHIVE" -C "$BOOTSTRAP_DIR" || { echo "ERROR: The downloaded source archive could not be extracted." >&2; exit 1; }
+  PROJECT_DIR="$(find "$BOOTSTRAP_DIR" -mindepth 2 -maxdepth 3 -type f -path '*/app/main.py' -print -quit | xargs -r dirname | xargs -r dirname)"
+  [[ -n "$PROJECT_DIR" && -f "$PROJECT_DIR/install.sh" ]] || { echo "ERROR: The source archive did not contain a valid installer." >&2; exit 1; }
+  bash "$PROJECT_DIR/install.sh" "$@"
+  exit $?
+fi
 EXISTING_INSTALL=0
 if [[ -e "$INSTALL_DIR/current" || -L "$INSTALL_DIR/current" ]]; then
   EXISTING_INSTALL=1
@@ -167,7 +148,7 @@ if ! id idontmonitor >/dev/null 2>&1; then useradd --system --home-dir /var/lib/
 install -d -o root -g root -m 0755 "$INSTALL_DIR" "$INSTALL_DIR/releases" "$INSTALL_DIR/releases/$VERSION"
 install -d -o root -g idontmonitor -m 0750 "$CONFIG_DIR"
 install -d -o idontmonitor -g idontmonitor -m 0750 "$STATE_DIR" "$LOG_DIR"
-cp -a "$(dirname "$0")/." "$INSTALL_DIR/releases/$VERSION/"
+cp -a "$SCRIPT_DIR/." "$INSTALL_DIR/releases/$VERSION/"
 chown -R root:root "$INSTALL_DIR/releases/$VERSION"
 ln -s "$INSTALL_DIR/releases/$VERSION" "$INSTALL_DIR/current.new"
 mv -Tf "$INSTALL_DIR/current.new" "$INSTALL_DIR/current"
@@ -377,6 +358,14 @@ SUDOERS
 chmod 0440 /etc/sudoers.d/idontmonitor-port
 visudo -cf /etc/sudoers.d/idontmonitor-port >/dev/null || fail "Port helper sudoers rule failed validation."
 
+# Install a root-owned, argument-validating helper for narrowly scoped service actions.
+install -o root -g root -m 0750 "$INSTALL_DIR/current/scripts/idontmonitor-ops" /usr/local/sbin/idontmonitor-ops
+cat > /etc/sudoers.d/idontmonitor-ops <<'OPS_SUDOERS'
+idontmonitor ALL=(root) NOPASSWD: /usr/local/sbin/idontmonitor-ops *
+OPS_SUDOERS
+chmod 0440 /etc/sudoers.d/idontmonitor-ops
+visudo -cf /etc/sudoers.d/idontmonitor-ops >/dev/null || fail "Operations helper sudoers rule failed validation."
+
 systemctl daemon-reload
 APP_START_OK=1
 systemctl enable idontmonitor >/dev/null 2>&1 || APP_START_OK=0
@@ -420,7 +409,7 @@ set -uo pipefail
 CONFIG=/etc/idontmonitor/config.json
 ENV_FILE=/etc/idontmonitor/environment
 STATE=/var/lib/idontmonitor/install-mode
-VERSION="1.8.1"
+VERSION="1.9.9"
 
 pause(){ read -r -p 'Press Enter to continue...' _ || true; }
 line(){ printf '%s\n' '------------------------------------------------------------'; }
@@ -429,7 +418,7 @@ update_check(){
   now=$(date +%s); cached_at=0; latest=''
   if [[ -r "$cache" ]]; then read -r cached_at latest < "$cache" || true; fi
   if [[ ! "$cached_at" =~ ^[0-9]+$ ]] || (( now-cached_at > 900 )) || [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    latest=$(curl -fsSL --connect-timeout 2 --max-time 4 -H 'Accept: application/vnd.github+json' -H 'User-Agent: idontMonitor-CLI/1.8.1' "https://api.github.com/repos/durwinam/idontMonitor/releases/latest" 2>/dev/null | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("tag_name", "")).lstrip("v"))' 2>/dev/null || true)
+    latest=$(curl -fsSL --connect-timeout 2 --max-time 4 -H 'Accept: application/vnd.github+json' -H 'User-Agent: idontMonitor-CLI/1.9.9' "https://api.github.com/repos/durwinam/idontMonitor/releases/latest" 2>/dev/null | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("tag_name", "")).lstrip("v"))' 2>/dev/null || true)
     if [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then printf '%s %s\n' "$now" "$latest" > "$cache" 2>/dev/null || true; else latest=''; fi
   fi
   if [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$(printf '%s\n%s\n' "$VERSION" "$latest" | sort -V | tail -1)" == "$latest" ]] && [[ "$latest" != "$VERSION" ]]; then
