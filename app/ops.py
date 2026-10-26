@@ -1,4 +1,4 @@
-"""Restricted operations API for idontMonitor v2.0.0.
+"""Restricted operations API for idontMonitor v2.0.1.
 
 All mutating system operations pass through a fixed root-owned helper. No API
 accepts a shell command, executable path, or arbitrary systemd unit name.
@@ -376,7 +376,7 @@ def summary(request: Request):
                      "tx_bytes": sum(int(x["tx_bytes"]) for x in measurable), "measured_tunnels": len(measurable),
                      "total_tunnels": len(tunnels), "coverage": "partial" if measurable and len(measurable) < len(tunnels) else ("complete" if measurable and len(measurable) == len(tunnels) else "unavailable"),
                      "source": "sum-of-verified-tunnel-counters"}
-    return {"version": "2.0.0", "tunnels": tunnels, "projects": projects, "traffic_total": traffic_total, "tunnel_count": len(tunnels),
+    return {"version": "2.0.1", "tunnels": tunnels, "projects": projects, "traffic_total": traffic_total, "tunnel_count": len(tunnels),
             "active_tunnels": active, "health_score": score, "disk_percent": disk_percent,
             "maintenance": maintenance, "generated_at": datetime.now(timezone.utc).isoformat(),
             "score_note": "Basic score uses verified disk usage and detected service state only; it is not a full reliability prediction."}
