@@ -573,7 +573,7 @@ panel_menu(){
       4) journalctl -u idontmonitor -n 100 --no-pager; pause;;
       5) echo "Port changes require updating the service environment and, for HTTPS, the reverse-proxy config."; echo "This release intentionally does not apply a partial port change from CLI."; echo "Use the verified installer/upgrade workflow after a config backup."; pause;;
       6) echo "Entry IP/domain is installer metadata. Changing it does not change DNS or firewall rules."; echo "For HTTPS, use a domain with valid DNS and the Caddy TLS workflow."; pause;;
-      7) echo "Custom URL paths, SSL toggling, and access-control management are not implemented in v1.3.0."; echo "No configuration was changed."; pause;;
+      7) echo "Custom URL paths, SSL toggling, and access-control management are not implemented in v1.9.9."; echo "No configuration was changed."; pause;;
       8) reset_panel_password;;
       9) update_check; echo "To install a verified update, run: sudo idontMonitor update"; pause;;
       0) return;;
