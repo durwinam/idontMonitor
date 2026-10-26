@@ -16,10 +16,10 @@ def test_version_parser_rejects_untrusted_tag():
 
 def test_update_helper_is_fixed_action_only():
     source=(ROOT / "scripts" / "idontmonitor-update").read_text()
-    assert "sys.argv[1]!='apply'" in source
-    assert "SHA-256 verification failed" in source
-    assert "Unsafe archive paths detected" in source
-    assert "Health check failed; previous version restored" in source
+    assert "sys.argv[1] not in ('apply','apply-main')" in source
+    assert "tarfile.open" in source
+    assert "Unsafe path or link detected" in source
+    assert "Health check failed; previous release was restored" in source
 
 def test_update_api_is_authenticated_and_no_arbitrary_urls():
     source=(ROOT / "app" / "main.py").read_text()
