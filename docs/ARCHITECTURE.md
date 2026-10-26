@@ -25,3 +25,10 @@
 - Release installation uses `/opt/idontmonitor/releases/<version>` and switches `/opt/idontmonitor/current` atomically after asset digest, archive-path, version and syntax validation. The helper runs a health check and restores the previous symlink if the new service fails health checks.
 - Configuration in `/etc/idontmonitor`, and persistent state in `/var/lib/idontmonitor`, are not extracted from the release ZIP or replaced by the updater.
 - GitHub API results are cached briefly in-process to avoid repeated unauthenticated requests; frontend polling is bounded to status checks rather than continuous downloads.
+
+
+## v1.9.9 operations boundary
+
+`app/ops.py` provides authenticated, bounded operations endpoints. Read-only probes use fixed argument arrays and timeouts. Privileged actions use `/usr/local/sbin/idontmonitor-ops`, a root-owned helper that validates action and service identifiers before invoking systemd. The sudoers entry permits only this helper; the helper does not expose a shell. `static/operations.js` is the UI client. See `docs/PLUGIN_API.md` for module safety requirements.
+
+The application log rotates at 100 MiB and retains three previous files. Tunnel service state is derived from systemd. Per-tunnel traffic is intentionally marked unavailable unless a unique, verified interface mapping exists. The provided Paqet archive is installer-only, so this project detects resulting service names but does not install or change Paqet itself.
