@@ -16,10 +16,10 @@ def load_config():
     try:
         return json.loads(CONFIG_PATH.read_text())
     except Exception:
-        return {"version":"1.9.9", "panel_path":"/", "session_secret":"", "admin_hash":"", "allowed_hosts":["localhost","127.0.0.1"]}
+        return {"version":"2.0.0", "panel_path":"/", "session_secret":"", "admin_hash":"", "allowed_hosts":["localhost","127.0.0.1"]}
 
 CFG = load_config()
-app = FastAPI(title="idontMonitor", version="1.9.9", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="idontMonitor", version="2.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 # Bounded application log: 100 MiB active file plus three rotated files.
 logger = logging.getLogger("idontmonitor")
 logger.setLevel(logging.INFO)
@@ -314,7 +314,7 @@ def check_github_update(force=False):
             return {**UPDATE_CACHE["result"], "cached": True}
         req = urllib.request.Request(
             f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest",
-            headers={"Accept":"application/vnd.github+json", "User-Agent":"idontMonitor-UpdateChecker/1.9.9", "X-GitHub-Api-Version":"2022-11-28"})
+            headers={"Accept":"application/vnd.github+json", "User-Agent":"idontMonitor-UpdateChecker/2.0.0", "X-GitHub-Api-Version":"2022-11-28"})
         try:
             with urllib.request.urlopen(req, timeout=6) as response:
                 release = json.loads(response.read(1024 * 1024).decode("utf-8"))
@@ -370,7 +370,7 @@ def update_apply(request: Request):
 
 
 @app.get('/healthz')
-def health(): return {"ok":True,"version":CFG.get('version','1.9.9')}
+def health(): return {"ok":True,"version":CFG.get('version','2.0.0')}
 
 def _cmd_ok(args):
     try:
@@ -676,7 +676,7 @@ async def change_port(request: Request):
         # Port changes require a root-owned, tightly-scoped helper installed by install.sh.
         helper = Path("/usr/local/sbin/idontmonitor-set-port")
         if not helper.exists():
-            raise HTTPException(status_code=503, detail="Port change helper is not installed. Reinstall/upgrade with the v1.9.9 installer.")
+            raise HTTPException(status_code=503, detail="Port change helper is not installed. Reinstall/upgrade with the v2.0.0 installer.")
         result = subprocess.run(["sudo", "-n", str(helper), str(port)], capture_output=True, text=True, timeout=15)
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail="Port change failed safely. Check service logs and firewall rules.")
@@ -687,4 +687,4 @@ async def change_port(request: Request):
 @app.get('/api/config')
 def public_config(request: Request):
     require_auth(request)
-    return {"version":CFG.get('version','1.9.9'),"theme_default":"Nebula Purple","themes":["Nebula Purple","Cyber Mint","Crimson Pulse","Arctic Blue","Emerald Matrix","Solar Amber","Ultra Dark"]}
+    return {"version":CFG.get('version','2.0.0'),"theme_default":"Nebula Purple","themes":["Nebula Purple","Cyber Mint","Crimson Pulse","Arctic Blue","Emerald Matrix","Solar Amber","Ultra Dark"]}
