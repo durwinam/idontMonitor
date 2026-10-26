@@ -1,8 +1,8 @@
-# idontMonitor plugin architecture (v1.9.9)
+# idontMonitor plugin architecture (v2.0.1)
 
 ## Security model
 
-Plugins are extension points, not a mechanism for executing arbitrary uploaded code. The v1.9.9 release establishes the operations router boundary (`app/ops.py`) and separates read-only probes from privileged mutations. New modules should be registered through explicit imports and routes, with authorization on every endpoint.
+Plugins are extension points, not a mechanism for executing arbitrary uploaded code. The v2.0.1 release establishes the operations router boundary (`app/ops.py`) and separates read-only probes from privileged mutations. New modules should be registered through explicit imports and routes, with authorization on every endpoint.
 
 ## Required rules for future modules
 
