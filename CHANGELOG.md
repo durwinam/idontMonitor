@@ -1,6 +1,18 @@
 # Changelog
 
-## v2.0.0
+## 2.0.1
+
+- Fixed Release updater to prefer the exact `idontMonitor-vX.Y.Z.tar.gz` asset and validate its GitHub-provided SHA-256 digest when available.
+- Added a tag-archive fallback only when the release has no matching project asset.
+- Hardened archive extraction against special files, traversal, and oversized expanded content.
+- Made release directory creation staged and refused in-place overwrite of an existing version directory.
+- Synchronizes updater, operations helper, systemd unit, and CLI version during update, with rollback backups.
+- Fixed the CLI menu's stale update message and expanded usage help.
+- Refuses installer in-place overwrite when the same version is already installed.
+- Expanded update tests and documentation.
+
+
+## v2.0.1
 - Release-based updater now uses the GitHub release tag source archive (`tar.gz`) instead of requiring a ZIP asset.
 - Added an explicit main-branch update path for development builds.
 - Improved version consistency across source, installer, CLI, and release metadata.

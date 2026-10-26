@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
-VERSION="2.0.0"
+VERSION="2.0.1"
 REPO_URL="https://github.com/durwinam/idontMonitor"
 INSTALL_DIR="/opt/idontmonitor"
 CONFIG_DIR="/etc/idontmonitor"
@@ -39,6 +39,10 @@ fi
 EXISTING_INSTALL=0
 if [[ -e "$INSTALL_DIR/current" || -L "$INSTALL_DIR/current" ]]; then
   EXISTING_INSTALL=1
+  if [[ -f "$INSTALL_DIR/current/VERSION" && "$(cat "$INSTALL_DIR/current/VERSION")" == "$VERSION" ]]; then
+    echo "This exact version is already installed. Use the updater or a newer release; refusing an in-place overwrite." >&2
+    exit 1
+  fi
   echo "Existing idontMonitor installation detected. Installing a new release while preserving config and state."
   # Create a protected rollback snapshot before touching code, packages or service settings.
   [[ -s "$CONFIG_DIR/config.json" && -s "$CONFIG_DIR/environment" && -s "$STATE_DIR/install-mode" ]] || {
@@ -409,7 +413,7 @@ set -uo pipefail
 CONFIG=/etc/idontmonitor/config.json
 ENV_FILE=/etc/idontmonitor/environment
 STATE=/var/lib/idontmonitor/install-mode
-VERSION="2.0.0"
+VERSION="2.0.1"
 
 pause(){ read -r -p 'Press Enter to continue...' _ || true; }
 line(){ printf '%s\n' '------------------------------------------------------------'; }
@@ -418,7 +422,7 @@ update_check(){
   now=$(date +%s); cached_at=0; latest=''
   if [[ -r "$cache" ]]; then read -r cached_at latest < "$cache" || true; fi
   if [[ ! "$cached_at" =~ ^[0-9]+$ ]] || (( now-cached_at > 900 )) || [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    latest=$(curl -fsSL --connect-timeout 2 --max-time 4 -H 'Accept: application/vnd.github+json' -H 'User-Agent: idontMonitor-CLI/2.0.0' "https://api.github.com/repos/durwinam/idontMonitor/releases/latest" 2>/dev/null | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("tag_name", "")).lstrip("v"))' 2>/dev/null || true)
+    latest=$(curl -fsSL --connect-timeout 2 --max-time 4 -H 'Accept: application/vnd.github+json' -H 'User-Agent: idontMonitor-CLI/2.0.1' "https://api.github.com/repos/durwinam/idontMonitor/releases/latest" 2>/dev/null | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("tag_name", "")).lstrip("v"))' 2>/dev/null || true)
     if [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then printf '%s %s\n' "$now" "$latest" > "$cache" 2>/dev/null || true; else latest=''; fi
   fi
   if [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$(printf '%s\n%s\n' "$VERSION" "$latest" | sort -V | tail -1)" == "$latest" ]] && [[ "$latest" != "$VERSION" ]]; then
@@ -573,7 +577,7 @@ panel_menu(){
       4) journalctl -u idontmonitor -n 100 --no-pager; pause;;
       5) echo "Port changes require updating the service environment and, for HTTPS, the reverse-proxy config."; echo "This release intentionally does not apply a partial port change from CLI."; echo "Use the verified installer/upgrade workflow after a config backup."; pause;;
       6) echo "Entry IP/domain is installer metadata. Changing it does not change DNS or firewall rules."; echo "For HTTPS, use a domain with valid DNS and the Caddy TLS workflow."; pause;;
-      7) echo "Custom URL paths, SSL toggling, and access-control management are not implemented in v2.0.0."; echo "No configuration was changed."; pause;;
+      7) echo "Custom URL paths, SSL toggling, and access-control management are not implemented in v2.0.1."; echo "No configuration was changed."; pause;;
       8) reset_panel_password;;
       9) update_check; echo "To install a verified update, run: sudo idontMonitor update"; pause;;
       0) return;;
@@ -646,13 +650,13 @@ case "${1:-menu}" in
         6) banner; echo "Telegram Bot integration is not configured in this release."; echo "No bot settings were found or changed."; pause;;
         7) panel_menu;;
         8) backup_menu;;
-        9) banner; echo "Secure self-updater is not implemented in this release."; echo "No files were changed. Update only from a verified release."; pause;;
+        9) banner; echo "Update from the latest stable GitHub Release?"; read -r -p 'Type UPDATE to continue: ' confirm; if [[ "$confirm" == UPDATE ]]; then sudo /usr/local/sbin/idontmonitor-update apply; else echo "Cancelled; no files were changed."; fi; pause;;
         10) banner; echo "Uninstall removes services and application files and may be destructive."; read -r -p 'Type UNINSTALL to continue: ' confirm; if [[ "$confirm" == UNINSTALL ]]; then echo "Automatic uninstall is not implemented in this release; nothing was removed."; else echo "Cancelled."; fi; pause;;
         0) exit 0;;
         *) echo "Invalid option"; sleep 1;;
       esac
     done;;
-  *) echo "Usage: idontMonitor [status|url|logs [N]|restart|update]"; exit 2;;
+  *) echo "Usage: idontMonitor [status|url|logs [N]|restart|update|update-main|update-check]"; exit 2;;
 esac
 CLI
 chmod 0755 /usr/local/bin/idontMonitor
