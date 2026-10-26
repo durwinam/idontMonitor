@@ -290,7 +290,7 @@ button:disabled{cursor:wait;opacity:.66}
 @media(max-width:480px){.tunnel-aggregate{padding:16px;border-radius:16px}.tunnel-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.tunnel-card-actions button{min-width:0;padding-inline:10px}}
 
 
-/* v1.9.9 native settings become branded, accessible toggle switches. */
+/* v2.0.0 native settings become branded, accessible toggle switches. */
 .toggle-row input[type="checkbox"],#page-operations input[type="checkbox"]{appearance:none;-webkit-appearance:none;position:relative;display:inline-block!important;flex:0 0 48px;width:48px!important;height:28px!important;min-width:48px;margin:0 0 0 auto!important;padding:0;border:1px solid rgba(148,163,184,.38);border-radius:999px;background:#273043;box-shadow:inset 0 2px 5px rgba(0,0,0,.24);cursor:pointer;vertical-align:middle;transition:background .2s,border-color .2s,box-shadow .2s}
 .toggle-row input[type="checkbox"]:before,#page-operations input[type="checkbox"]:before{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#dbe4f0;box-shadow:0 2px 6px rgba(0,0,0,.28);transition:transform .2s cubic-bezier(.2,.75,.25,1),background .2s}
 .toggle-row input[type="checkbox"]:checked,#page-operations input[type="checkbox"]:checked{background:linear-gradient(100deg,#0d9488,#2dd4bf);border-color:#5eead4;box-shadow:0 0 0 3px rgba(45,212,191,.09),inset 0 2px 5px rgba(0,0,0,.12)}
@@ -304,7 +304,7 @@ html[dir="rtl"] .toggle-row input[type="checkbox"]:checked:before,html[dir="rtl"
 .boot-screen.boot-exit *{animation:none!important}
 @media(max-height:650px){.boot-logo-wrap{width:min(32vh,220px)!important}.boot-wordmark{font-size:clamp(25px,4vh,40px)!important}.boot-caption{margin-bottom:12px!important}.boot-track{margin-top:10px}}
 
-/* v1.9.9: clean, centered boot experience with robust mobile viewport handling. */
+/* v2.0.0: clean, centered boot experience with robust mobile viewport handling. */
 .boot-screen{min-height:100vh;min-height:100dvh;min-height:-webkit-fill-available;padding:clamp(20px,5vh,56px) 22px calc(22px + env(safe-area-inset-bottom));gap:0;justify-content:center;overscroll-behavior:contain}
 .boot-screen:after{opacity:.08;background-size:44px 44px}
 .boot-logo-wrap{width:min(38vw,250px);margin-bottom:10px}
@@ -317,7 +317,7 @@ html[dir="rtl"] .toggle-row input[type="checkbox"]:checked:before,html[dir="rtl"
 @media(max-width:760px){.boot-logo-wrap{width:min(58vw,230px)}.boot-orbit{width:min(65vw,255px)}.boot-orbit-b{width:min(72vw,285px)}.boot-caption{letter-spacing:1.7px;margin-bottom:20px}}
 @media(max-height:650px){.boot-logo-wrap{width:min(32vh,180px)}.boot-caption{margin-bottom:14px}.boot-track{margin-top:11px}}
 
-/* v1.9.9: branded form controls across every page (not browser-default widgets). */
+/* v2.0.0: branded form controls across every page (not browser-default widgets). */
 input:not([type=checkbox]):not([type=radio]):not([type=file]),select,textarea{color:var(--text,#eef3ff);background:rgba(7,12,24,.88);border:1px solid rgba(111,133,174,.28);border-radius:12px;padding:.72rem .85rem;min-height:42px;box-shadow:inset 0 1px 0 rgba(255,255,255,.025);outline:none;transition:border-color .18s,box-shadow .18s,background .18s}
 input:not([type=checkbox]):not([type=radio]):not([type=file]):focus,select:focus,textarea:focus{border-color:#36d8cf;box-shadow:0 0 0 3px rgba(54,216,207,.12);background:rgba(9,18,31,.98)}
 select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(45deg,transparent 50%,#90a3c2 50%),linear-gradient(135deg,#90a3c2 50%,transparent 50%);background-position:calc(100% - 17px) 50%,calc(100% - 12px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:2.2rem}
@@ -325,7 +325,7 @@ html[dir=rtl] select{background-position:17px 50%,12px 50%;padding-right:.85rem;
 input::placeholder,textarea::placeholder{color:#7f8ca6;opacity:1}input[type=file]{color:var(--muted,#9ba8c2);max-width:100%}button{transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}button:not(:disabled):active{transform:translateY(1px)}
 @media(prefers-reduced-motion:reduce){button,.boot-screen,input,select,textarea{transition:none!important}}
 
-/* v1.9.9 clean branded boot screen and tunnel metadata chips */
+/* v2.0.0 clean branded boot screen and tunnel metadata chips */
 .boot-screen{background:#070b13;display:grid;place-items:center;padding:calc(24px + env(safe-area-inset-top,0px)) 20px calc(24px + env(safe-area-inset-bottom,0px));min-height:100vh;min-height:100dvh;min-height:-webkit-fill-available;transition:opacity .28s ease,visibility .28s ease}
 .boot-screen:before{inset:0;background:radial-gradient(ellipse at 50% 35%,rgba(42,214,205,.13),transparent 34%),radial-gradient(ellipse at 50% 65%,rgba(103,111,255,.12),transparent 48%);animation:none}
 .boot-screen:after{opacity:.07;background-size:42px 42px}
@@ -340,7 +340,7 @@ html[dir="rtl"] .toggle-row input[type="checkbox"]:checked:before,html[dir="rtl"
 @media(max-width:520px){.boot-shell{padding:24px 16px;width:min(100%,340px)}.boot-emblem{width:96px;height:96px;border-radius:27px}.boot-logo{width:58px;height:58px}.tunnel-card-dedicated{padding:.9rem}}
 @media(prefers-reduced-motion:reduce){.boot-screen:before,.boot-track i,.tunnel-card-dedicated{animation:none!important;transition:none!important}}
 
-/* v1.9.9: tunnel cards inherit the active theme tokens instead of fixed neon colors. */
+/* v2.0.0: tunnel cards inherit the active theme tokens instead of fixed neon colors. */
 #page-operations .tunnel-card-dedicated{background:linear-gradient(145deg,color-mix(in srgb,var(--panel) 94%,var(--accent) 6%),var(--panel));border:1px solid var(--line);box-shadow:0 12px 30px color-mix(in srgb,var(--text) 8%,transparent)}
 #page-operations .tunnel-card-dedicated:before{background:linear-gradient(90deg,var(--accent),var(--accent-2,var(--accent)));opacity:.9}
 #page-operations .tunnel-card-dedicated:after{background:color-mix(in srgb,var(--accent) 13%,transparent)}
