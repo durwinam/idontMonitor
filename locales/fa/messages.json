@@ -348,5 +348,9 @@
   "Not available": "موجود نمی‌باشد",
   "Speed tests transfer real data and consume bandwidth. Download and upload run bounded timed transfers for an approximately 20-second test; a short per-phase rate limit is enforced. Results depend on the route and public test endpoint.": "تست سرعت داده واقعی منتقل می‌کند و پهنای باند مصرف می‌کند. دریافت و ارسال در انتقال‌های زمان‌دار و محدودشده برای تستی حدود ۲۰ ثانیه اجرا می‌شوند؛ برای هر مرحله محدودیت نرخ کوتاه اعمال می‌شود. نتایج به مسیر شبکه و نقطه پایانی عمومی تست بستگی دارند.",
   "DETECTED TUNNEL SERVICES": "سرویس‌های تانل شناسایی‌شده",
-  "active services": "سرویس فعال"
+  "active services": "سرویس فعال",
+  "Human verification": "تأیید انسانی",
+  "ANTI-BOT CHECK": "جلوگیری از ورود ربات",
+  "Answer to human verification": "پاسخ تأیید انسانی",
+  "Answer": "پاسخ"
 }
