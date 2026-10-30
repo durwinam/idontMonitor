@@ -11,15 +11,25 @@ from collections import defaultdict, deque
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 CONFIG_PATH = Path(os.environ.get("IDONTMONITOR_CONFIG", "/etc/idontmonitor/config.json"))
+ACCOUNT_STATE_PATH = Path(os.environ.get("IDM_ACCOUNT_STATE", "/var/lib/idontmonitor/account.json"))
 
 def load_config():
     try:
-        return json.loads(CONFIG_PATH.read_text())
+        cfg = json.loads(CONFIG_PATH.read_text())
     except Exception:
-        return {"version":"2.0.1", "panel_path":"/", "session_secret":"", "admin_hash":"", "allowed_hosts":["localhost","127.0.0.1"]}
+        cfg = {"version":"2.3.6", "panel_path":"/", "session_secret":"", "admin_hash":"", "allowed_hosts":["localhost","127.0.0.1"]}
+    # Mutable account credentials live in service-owned state, not the root-owned deployment config.
+    try:
+        account = json.loads(ACCOUNT_STATE_PATH.read_text())
+        if isinstance(account, dict):
+            for key in ("admin_user", "admin_hash"):
+                if isinstance(account.get(key), str) and account[key]: cfg[key] = account[key]
+    except (OSError, ValueError, TypeError):
+        pass
+    return cfg
 
 CFG = load_config()
-app = FastAPI(title="idontMonitor", version="2.0.1", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="idontMonitor", version="2.3.6", docs_url=None, redoc_url=None, openapi_url=None)
 # Bounded application log: 100 MiB active file plus three rotated files.
 logger = logging.getLogger("idontmonitor")
 logger.setLevel(logging.INFO)
@@ -50,6 +60,27 @@ app.add_middleware(SessionMiddleware, secret_key=CFG.get("session_secret") or se
 allowed_hosts = CFG.get("allowed_hosts") or ["localhost", "127.0.0.1"]
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts + ["*.localhost"])
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+@app.middleware("http")
+async def security_response_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data: https:; font-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+        "connect-src 'self' https://api.telegram.org; frame-ancestors 'none'; "
+        "base-uri 'self'; form-action 'self'"
+    )
+    if request.url.path.startswith("/api/") or request.url.path in ("/login", "/healthz"):
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault("Pragma", "no-cache")
+    if request.url.scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 LOCALES = ROOT / "locales"
 if LOCALES.is_dir():
     app.mount("/locales", StaticFiles(directory=str(LOCALES)), name="locales")
@@ -58,16 +89,42 @@ if LOCALES.is_dir():
 # limits too; shared Redis-backed limits are needed if scaling to multiple instances.
 login_attempts = defaultdict(deque)
 login_ip_requests = defaultdict(deque)
+LOGIN_CAPTCHA_CHALLENGES = {}
+LOGIN_CAPTCHA_LOCK = __import__("threading").RLock()
+
+# One-time in-memory challenges for sensitive VPS root-password changes.
+# Multi-worker deployments should use a shared challenge store.
+VPS_CAPTCHA_CHALLENGES = {}
+VPS_CAPTCHA_LOCK = __import__("threading").RLock()
+vps_captcha_requests = defaultdict(deque)
+vps_password_attempts = defaultdict(deque)
 
 def client_ip(request: Request):
     # Do not trust forwarded headers unless an explicitly configured trusted proxy is added.
     return request.client.host if request.client else "unknown"
 
 def limit_hit(bucket, key, max_hits, window):
-    now=time.time(); q=bucket[key]
-    while q and q[0] < now-window: q.popleft()
-    if len(q) >= max_hits: return True
-    q.append(now); return False
+    now = time.time()
+    # Bound attacker-controlled per-IP state to prevent memory exhaustion from
+    # distributed credential stuffing or challenge floods.
+    if len(bucket) > 10000:
+        for old_key, old_queue in list(bucket.items()):
+            while old_queue and old_queue[0] < now - window:
+                old_queue.popleft()
+            if not old_queue:
+                bucket.pop(old_key, None)
+            if len(bucket) <= 8000:
+                break
+        if len(bucket) > 12000:
+            for old_key in list(bucket.keys())[:2000]:
+                bucket.pop(old_key, None)
+    q = bucket[key]
+    while q and q[0] < now - window:
+        q.popleft()
+    if len(q) >= max_hits:
+        return True
+    q.append(now)
+    return False
 
 LOGIN_AUDIT_PATH = Path(os.environ.get("IDM_LOGIN_AUDIT", "/var/lib/idontmonitor/login-audit.json"))
 
@@ -92,13 +149,19 @@ def record_login(username: str, request: Request, success: bool):
         # Login should not fail just because audit storage is unavailable.
         pass
 
+def password_policy_ok(password: str) -> bool:
+    return bool(isinstance(password, str) and 16 <= len(password) <= 128
+        and re.search(r"[a-z]", password) and re.search(r"[A-Z]", password)
+        and re.search(r"[0-9]", password) and re.search(r"[^A-Za-z0-9]", password)
+        and not any(c in password for c in ("\n", "\r", "\x00")))
+
 def verify_password(password: str) -> bool:
     # Format: scrypt$N$r$p$salt_hex$digest_hex
     try:
         scheme,n,r,p,salt_hex,digest_hex = CFG["admin_hash"].split("$")
         if scheme != "scrypt": return False
         salt=bytes.fromhex(salt_hex); expected=bytes.fromhex(digest_hex)
-        actual=hashlib.scrypt(password.encode(), salt=salt, n=int(n), r=int(r), p=int(p), dklen=len(expected))
+        actual=hashlib.scrypt(password.encode(), salt=salt, n=int(n), r=int(r), p=int(p), dklen=len(expected), maxmem=512*1024*1024)
         return hmac.compare_digest(actual, expected)
     except Exception:
         return False
@@ -139,6 +202,7 @@ TRAFFIC_LOCK_PATH = Path(os.environ.get("IDM_TRAFFIC_LOCK", "/var/lib/idontmonit
 HISTORY_PATH = Path(os.environ.get("IDM_HISTORY_PATH", "/var/lib/idontmonitor/metrics-history.json"))
 HISTORY_LOCK = __import__("threading").Lock()
 HISTORY_MAX_SAMPLES = 60 * 24  # retain up to 24h at the default one-minute history cadence
+TELEGRAM_BOT_CONFIG = Path(os.environ.get('IDM_TELEGRAM_CONFIG', '/var/lib/idontmonitor/telegram-bot.json'))
 
 def _read_traffic_state():
     try:
@@ -314,7 +378,7 @@ def check_github_update(force=False):
             return {**UPDATE_CACHE["result"], "cached": True}
         req = urllib.request.Request(
             f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest",
-            headers={"Accept":"application/vnd.github+json", "User-Agent":"idontMonitor-UpdateChecker/2.0.1", "X-GitHub-Api-Version":"2022-11-28"})
+            headers={"Accept":"application/vnd.github+json", "User-Agent":"idontMonitor-UpdateChecker/2.3.6", "X-GitHub-Api-Version":"2022-11-28"})
         try:
             with urllib.request.urlopen(req, timeout=6) as response:
                 release = json.loads(response.read(1024 * 1024).decode("utf-8"))
@@ -370,7 +434,7 @@ def update_apply(request: Request):
 
 
 @app.get('/healthz')
-def health(): return {"ok":True,"version":CFG.get('version','2.0.1')}
+def health(): return {"ok":True,"version":CFG.get('version','2.3.6')}
 
 def _cmd_ok(args):
     try:
@@ -418,18 +482,60 @@ def security_status(request: Request):
 def session_info(request: Request):
     return {"authenticated":bool(request.session.get('authenticated'))}
 
+def _new_login_challenge(request: Request):
+    left = secrets.randbelow(8) + 2
+    right = secrets.randbelow(8) + 2
+    token = secrets.token_urlsafe(32); now = int(time.time()); ip = client_ip(request)
+    with LOGIN_CAPTCHA_LOCK:
+        for old_token, old in list(LOGIN_CAPTCHA_CHALLENGES.items()):
+            if int(old.get("expires_at", 0)) < now: LOGIN_CAPTCHA_CHALLENGES.pop(old_token, None)
+        if len(LOGIN_CAPTCHA_CHALLENGES) >= 4096:
+            oldest = sorted(LOGIN_CAPTCHA_CHALLENGES.items(), key=lambda item: item[1].get("expires_at", 0))[:512]
+            for old_token, _ in oldest: LOGIN_CAPTCHA_CHALLENGES.pop(old_token, None)
+        LOGIN_CAPTCHA_CHALLENGES[token] = {"answer": str(left + right), "expires_at": now + 180, "ip": ip}
+    # The answer is server-side only; the signed but readable session cookie never contains it.
+    return {'token': token, 'question': f'{left} + {right}', 'expires_in': 180}
+
+@app.get('/api/login-challenge')
+def login_challenge(request: Request):
+    if request.session.get('authenticated'):
+        raise HTTPException(status_code=409, detail='Already authenticated')
+    if limit_hit(login_ip_requests, 'captcha:' + client_ip(request), 30, 60):
+        raise HTTPException(status_code=429, detail='Too many challenge requests. Wait before trying again.')
+    return _new_login_challenge(request)
+
 @app.get('/login', response_class=HTMLResponse)
 def login_page(request: Request):
     if request.session.get('authenticated'): return RedirectResponse('/',status_code=303)
-    return FileResponse(STATIC/'login.html')
+    challenge = _new_login_challenge(request)
+    page = (STATIC/'login.html').read_text(encoding='utf-8')
+    page = page.replace('id="captchaQuestion">Loading…', 'id="captchaQuestion">' + challenge['question'])
+    page = page.replace('name="captcha_token" value=""', 'name="captcha_token" value="' + challenge['token'] + '"')
+    return HTMLResponse(page)
 
 @app.post('/login')
-def login(request: Request, username: str = Form(...), password: str = Form(...)):
+def login(request: Request, username: str = Form(...), password: str = Form(...),
+          captcha_token: str = Form(''), captcha_answer: str = Form('')):
     ip=client_ip(request)
+    # HTTP is allowed for compatibility with direct-IP deployments. The login
+    # page displays a short HTTPS/TLS recommendation when the connection is HTTP.
+    # Credentials are not encrypted in transit over HTTP; HTTPS remains strongly recommended.
     if limit_hit(login_ip_requests,ip,30,60) or limit_hit(login_attempts,ip,5,900):
         raise HTTPException(status_code=429,detail='Too many login attempts. Wait before trying again.')
+    with LOGIN_CAPTCHA_LOCK:
+        challenge = LOGIN_CAPTCHA_CHALLENGES.pop(captcha_token, None) if captcha_token else None
+    valid_challenge = bool(isinstance(challenge, dict)
+        and int(challenge.get('expires_at', 0)) >= int(time.time())
+        and hmac.compare_digest(str(challenge.get('ip', '')).encode(), ip.encode())
+        and hmac.compare_digest(str(challenge.get('answer', '')).encode(), captcha_answer.strip().encode()))
+    if not valid_challenge:
+        record_login(username, request, False)
+        raise HTTPException(status_code=400, detail='CAPTCHA is incorrect or expired. Solve the new challenge and try again.')
     valid_user=hmac.compare_digest(username.encode(),str(CFG.get('admin_user','admin')).encode())
-    valid=valid_user and verify_password(password)
+    # Always perform the expensive password hash check, even for an invalid
+    # username, to reduce account-ID timing side channels.
+    valid_password=verify_password(password)
+    valid=valid_user and valid_password
     if not valid:
         record_login(username, request, False)
         raise HTTPException(status_code=401,detail='Invalid credentials')
@@ -590,6 +696,59 @@ async def save_settings(request: Request):
         _write_traffic_state(state)
     return {"ok": True, "traffic_quota_gb": quota, "traffic_period": period}
 
+
+@app.get('/api/telegram-bot')
+def telegram_bot_settings(request: Request):
+    require_auth(request)
+    try:
+        d=json.loads(TELEGRAM_BOT_CONFIG.read_text())
+        admins=d.get('admin_ids',[])
+        token_set=bool(d.get('token'))
+    except Exception:
+        admins=[]; token_set=False
+    return {"configured":token_set and len(admins)>0, "token_set":token_set, "token_preview":"configured (hidden)" if token_set else "", "admin_ids":admins}
+
+@app.post('/api/telegram-bot')
+async def save_telegram_bot_settings(request: Request):
+    require_auth(request)
+    try:
+        body=await request.json()
+        token=str(body.get('token','')).strip()
+        admin_values=body.get('admin_ids',[])
+        if not isinstance(admin_values,list) or not 1 <= len(admin_values) <= 3:
+            raise ValueError('Enter between one and three numeric Telegram admin IDs')
+        admins=[]
+        for value in admin_values:
+            value=str(value).strip()
+            if not re.fullmatch(r'[1-9][0-9]{4,19}',value): raise ValueError('Admin IDs must be numeric Telegram user IDs')
+            if int(value) not in admins: admins.append(int(value))
+        if len(admins)!=len(admin_values): raise ValueError('Admin IDs must be unique')
+        if not token:
+            try: token=json.loads(TELEGRAM_BOT_CONFIG.read_text()).get('token','')
+            except Exception: pass
+        if not re.fullmatch(r'[0-9]{5,15}:[A-Za-z0-9_-]{20,}',token):
+            raise ValueError('Enter a valid Telegram bot token from BotFather')
+        # Verify token before persisting it; never return token to the browser.
+        req=urllib.request.Request(f'https://api.telegram.org/bot{token}/getMe',data=b'',method='GET')
+        with urllib.request.urlopen(req,timeout=10) as response: result=json.loads(response.read(65536))
+        if not result.get('ok') or not isinstance(result.get('result'),dict):
+            raise ValueError('Telegram rejected this bot token')
+        TELEGRAM_BOT_CONFIG.parent.mkdir(parents=True,exist_ok=True)
+        fd,tmp=tempfile.mkstemp(prefix='.telegram-bot-',dir=str(TELEGRAM_BOT_CONFIG.parent))
+        with os.fdopen(fd,'w',encoding='utf-8') as f: json.dump({'schema':1,'token':token,'admin_ids':admins,'bot_username':result['result'].get('username','')},f,separators=(',',':'))
+        os.chmod(tmp,0o600); os.replace(tmp,TELEGRAM_BOT_CONFIG)
+        logger.info('Telegram bot settings updated; token omitted; admin_count=%d',len(admins))
+        return {'ok':True,'configured':True,'bot_username':result['result'].get('username',''),'admin_ids':admins,'message':'Bot settings saved securely. The Telegram worker will reload configuration.'}
+    except HTTPException: raise
+    except urllib.error.HTTPError as e:
+        raise HTTPException(status_code=400,detail='Telegram token verification failed (HTTP error)')
+    except (urllib.error.URLError,TimeoutError):
+        raise HTTPException(status_code=502,detail='Could not reach Telegram to verify the token')
+    except ValueError as e:
+        raise HTTPException(status_code=400,detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=400,detail='Invalid Telegram bot settings')
+
 @app.get('/api/account')
 def account_info(request: Request):
     require_auth(request)
@@ -640,10 +799,10 @@ async def change_password(request: Request):
         current = str(body.get("current_password", ""))
         new_password = str(body.get("new_password", ""))
         if not verify_password(current): raise HTTPException(status_code=403, detail="Current password is incorrect")
-        if len(new_password) < 12 or len(new_password) > 256:
-            raise HTTPException(status_code=400, detail="New password must be at least 12 characters")
-        salt=secrets.token_bytes(16); n=16384; r=8; parallel=1
-        digest=hashlib.scrypt(new_password.encode(),salt=salt,n=n,r=r,p=parallel,dklen=32)
+        if not password_policy_ok(new_password):
+            raise HTTPException(status_code=400, detail="Password must be 16–128 characters and include uppercase, lowercase, a number, and a special character")
+        salt=secrets.token_bytes(16); n=32768; r=8; parallel=1
+        digest=hashlib.scrypt(new_password.encode(),salt=salt,n=n,r=r,p=parallel,dklen=32,maxmem=512*1024*1024)
         CFG["admin_hash"]=f"scrypt${n}${r}${parallel}${salt.hex()}${digest.hex()}"
         _save_config()
         request.session.clear()
@@ -652,16 +811,18 @@ async def change_password(request: Request):
     except Exception: raise HTTPException(status_code=400, detail="Invalid password request")
 
 def _save_config():
+    tmp = None
     try:
-        ACCOUNT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        ACCOUNT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd, tmp = tempfile.mkstemp(prefix=".account-", dir=str(ACCOUNT_STATE_PATH.parent))
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"admin_user": CFG.get("admin_user","admin"), "admin_hash": CFG.get("admin_hash","")}, f, separators=(",", ":"))
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, ACCOUNT_STATE_PATH)
+            json.dump({"admin_user": CFG.get("admin_user", ""), "admin_hash": CFG.get("admin_hash", "")}, f, separators=(",", ":"))
+            f.flush(); os.fsync(f.fileno())
+        os.chmod(tmp, 0o600); os.replace(tmp, ACCOUNT_STATE_PATH); os.chmod(ACCOUNT_STATE_PATH, 0o600)
     except Exception:
-        try: os.unlink(tmp)
-        except Exception: pass
+        if tmp:
+            try: os.unlink(tmp)
+            except OSError: pass
         raise HTTPException(status_code=500, detail="Could not save account settings")
 
 @app.post('/api/account/port')
@@ -676,7 +837,7 @@ async def change_port(request: Request):
         # Port changes require a root-owned, tightly-scoped helper installed by install.sh.
         helper = Path("/usr/local/sbin/idontmonitor-set-port")
         if not helper.exists():
-            raise HTTPException(status_code=503, detail="Port change helper is not installed. Reinstall/upgrade with the v2.0.1 installer.")
+            raise HTTPException(status_code=503, detail="Port change helper is not installed. Reinstall/upgrade with the v2.3.6 installer.")
         result = subprocess.run(["sudo", "-n", str(helper), str(port)], capture_output=True, text=True, timeout=15)
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail="Port change failed safely. Check service logs and firewall rules.")
@@ -684,7 +845,127 @@ async def change_port(request: Request):
     except HTTPException: raise
     except Exception: raise HTTPException(status_code=400, detail="Invalid port request")
 
+@app.get('/api/vps/summary')
+def vps_summary(request: Request):
+    require_auth(request)
+    try:
+        mem = {}
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            if ':' in line:
+                k, v = line.split(':', 1); mem[k] = int(v.strip().split()[0]) * 1024
+        total = mem.get('MemTotal', 0); available = mem.get('MemAvailable', 0)
+        disk = shutil.disk_usage('/')
+        load = os.getloadavg() if hasattr(os, 'getloadavg') else (0, 0, 0)
+        uptime = int(float(Path('/proc/uptime').read_text().split()[0]))
+        os_name = platform.platform()
+        try:
+            for line in Path('/etc/os-release').read_text().splitlines():
+                if line.startswith('PRETTY_NAME='):
+                    os_name = line.split('=', 1)[1].strip().strip('"'); break
+        except OSError: pass
+        return {'hostname': socket.gethostname(), 'os': os_name, 'kernel': platform.release(),
+                'cpu_count': os.cpu_count() or 1, 'load': [round(float(x), 2) for x in load],
+                'uptime_seconds': uptime, 'memory_total': total, 'memory_used': max(0, total-available),
+                'memory_available': available, 'disk_total': disk.total, 'disk_used': disk.used,
+                'disk_free': disk.free, 'status': 'ok'}
+    except Exception:
+        logger.exception('VPS summary collection failed')
+        raise HTTPException(status_code=503, detail='Live VPS information is temporarily unavailable')
+
+def _new_vps_password_captcha(request: Request):
+    # Create a short-lived challenge bound to both source IP and login session.
+    left = __import__("secrets").randbelow(8) + 2
+    right = __import__("secrets").randbelow(8) + 2
+    token = secrets.token_urlsafe(32)
+    now = int(time.time())
+    challenge = {
+        "answer": str(left + right), "expires_at": now + 180,
+        "ip": client_ip(request), "login_at": int(request.session.get("login_at", 0) or 0),
+    }
+    with VPS_CAPTCHA_LOCK:
+        for old_token, old in list(VPS_CAPTCHA_CHALLENGES.items()):
+            if int(old.get("expires_at", 0)) < now:
+                VPS_CAPTCHA_CHALLENGES.pop(old_token, None)
+        if len(VPS_CAPTCHA_CHALLENGES) >= 2048:
+            oldest = sorted(VPS_CAPTCHA_CHALLENGES.items(), key=lambda item: item[1].get("expires_at", 0))[:256]
+            for old_token, _ in oldest:
+                VPS_CAPTCHA_CHALLENGES.pop(old_token, None)
+        VPS_CAPTCHA_CHALLENGES[token] = challenge
+    return {"token": token, "question": f"{left} + {right}", "expires_in": 180}
+
+@app.get('/api/vps/password-challenge')
+def vps_password_challenge(request: Request):
+    require_auth(request)
+    ip = client_ip(request)
+    if limit_hit(vps_captcha_requests, ip, 12, 60):
+        raise HTTPException(status_code=429, detail="Too many CAPTCHA requests. Wait before trying again.")
+    return _new_vps_password_captcha(request)
+
+@app.post('/api/vps/password')
+async def vps_change_password(request: Request):
+    require_auth(request)
+    try:
+        body = await request.json()
+        current = str(body.get('current_password', ''))
+        new_password = str(body.get('new_password', ''))
+        confirm = str(body.get('confirm_password', ''))
+        captcha_token = str(body.get('captcha_token', ''))[:128]
+        captcha_answer = str(body.get('captcha_answer', '')).strip()[:8].translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789'))
+        ip = client_ip(request)
+        if limit_hit(vps_password_attempts, ip, 5, 900):
+            raise HTTPException(status_code=429, detail='Too many password-change attempts. Wait before trying again.')
+        with VPS_CAPTCHA_LOCK:
+            challenge = VPS_CAPTCHA_CHALLENGES.pop(captcha_token, None) if captcha_token else None
+        valid_captcha = bool(
+            isinstance(challenge, dict)
+            and int(challenge.get('expires_at', 0)) >= int(time.time())
+            and hmac.compare_digest(str(challenge.get('ip', '')).encode(), ip.encode())
+            and int(challenge.get('login_at', 0)) == int(request.session.get('login_at', 0) or 0)
+            and hmac.compare_digest(str(challenge.get('answer', '')).encode(), captcha_answer.encode())
+        )
+        if not valid_captcha:
+            raise HTTPException(status_code=400, detail='CAPTCHA is incorrect or expired. Solve the new challenge and try again.')
+        if not verify_password(current): raise HTTPException(status_code=403, detail='Current panel password is incorrect')
+        if new_password != confirm: raise HTTPException(status_code=400, detail='New passwords do not match')
+        if len(new_password) < 14 or len(new_password) > 128 or any(c in new_password for c in ('\n','\r','\x00',':')):
+            raise HTTPException(status_code=400, detail='Password must be 14–128 characters and cannot contain newline or colon')
+        helper = Path('/usr/local/sbin/idontmonitor-ops')
+        if not helper.is_file() or helper.is_symlink(): raise HTTPException(status_code=503, detail='Trusted VPS operations helper is not installed')
+        result = subprocess.run(['sudo','-n',str(helper),'change-root-password'], input=new_password+'\n',
+                                capture_output=True, text=True, timeout=12, close_fds=True,
+                                env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C.UTF-8'})
+        if result.returncode != 0: raise HTTPException(status_code=500, detail='Password change failed safely; check server logs')
+        logger.warning('Root account password changed through authenticated VPS management')
+        return {'ok': True, 'message': 'Root VPS password changed successfully.'}
+    except HTTPException: raise
+    except subprocess.TimeoutExpired: raise HTTPException(status_code=504, detail='Password helper timed out')
+    except Exception: raise HTTPException(status_code=400, detail='Invalid password-change request')
+
+@app.post('/api/vps/reboot')
+async def vps_reboot(request: Request):
+    require_auth(request)
+    try:
+        body = await request.json()
+        current = str(body.get("current_password", ""))
+        if not verify_password(current):
+            raise HTTPException(status_code=403, detail="Current password is incorrect")
+        helper = Path("/usr/local/sbin/idontmonitor-ops")
+        if not helper.is_file() or helper.is_symlink():
+            raise HTTPException(status_code=503, detail="Trusted VPS operations helper is not installed")
+        result = subprocess.run(["sudo", "-n", str(helper), "reboot-vps"], capture_output=True, text=True, timeout=5,
+                                stdin=subprocess.DEVNULL, close_fds=True,
+                                env={"PATH":"/usr/sbin:/usr/bin:/sbin:/bin", "LANG":"C.UTF-8"})
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail="Reboot request failed safely; check service logs")
+        return {"ok": True, "message": "Reboot requested. The dashboard may disconnect briefly."}
+    except HTTPException:
+        raise
+    except subprocess.TimeoutExpired:
+        return {"ok": True, "message": "Reboot was dispatched; the server may be restarting."}
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid reboot request")
+
 @app.get('/api/config')
 def public_config(request: Request):
     require_auth(request)
-    return {"version":CFG.get('version','2.0.1'),"theme_default":"Nebula Purple","themes":["Nebula Purple","Cyber Mint","Crimson Pulse","Arctic Blue","Emerald Matrix","Solar Amber","Ultra Dark"]}
+    return {"version":CFG.get('version','2.3.6'),"theme_default":"Nebula Purple","themes":["Nebula Purple","Cyber Mint","Crimson Pulse","Arctic Blue","Emerald Matrix","Solar Amber","Ultra Dark", "Midnight Emerald Glass VIP"]}

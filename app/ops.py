@@ -1,4 +1,4 @@
-"""Restricted operations API for idontMonitor v2.0.1.
+"""Restricted operations API for idontMonitor v2.3.6.
 
 All mutating system operations pass through a fixed root-owned helper. No API
 accepts a shell command, executable path, or arbitrary systemd unit name.
@@ -149,19 +149,30 @@ def _traffic_for_unit(unit: str, counters: dict[str, dict[str, int]]) -> dict[st
         if native:
             return native
     candidates: set[str] = set()
-    if stem.startswith(("ctunnel@", "ctunnel-engine@")):
-        # C-Tunnel's source defines Dev(name) as "ct-" + tunnel name.
+    is_ctunnel = stem.startswith(("ctunnel@", "ctunnel-engine@"))
+    if is_ctunnel:
+        # C-Tunnel defines Dev(name) as "ct-" + tunnel name. Recent releases
+        # can create ECMP lane devices named <DEV>.1 through <DEV>.7; include
+        # only those exact source-defined names, never arbitrary ct* interfaces.
         name = stem.split("@", 1)[1]
-        candidates.add("ct-" + name)
+        base = "ct-" + name
+        candidates.add(base)
+        candidates.update(f"{base}.{lane}" for lane in range(1, 8))
     elif stem.startswith("paqet-"):
         # Paqet interfaces are only accepted when the exact instance-derived
         # name exists; no prefix or host-interface guessing is performed.
         candidates.add(stem)
-    matches = [(name, data) for name, data in counters.items() if name in candidates]
-    if len(matches) == 1:
-        name, data = matches[0]
-        return {"available": True, "interface": name, **data,
-                "source": "engine-derived-exact-interface", "note": "Exact interface name derived from this tunnel instance."}
+    matches = sorted((name, data) for name, data in counters.items() if name in candidates)
+    if matches:
+        rx = sum(data["rx_bytes"] for _, data in matches)
+        tx = sum(data["tx_bytes"] for _, data in matches)
+        names = [name for name, _ in matches]
+        interface = names[0] if len(names) == 1 else f"{names[0]} (+{len(names)-1} lanes)"
+        note = ("Exact C-Tunnel interface and ECMP lane counters summed from real interfaces."
+                if is_ctunnel else "Exact interface name derived from this tunnel instance.")
+        return {"available": True, "interface": interface, "rx_bytes": rx, "tx_bytes": tx,
+                "source": "engine-derived-exact-interface", "note": note,
+                "interfaces": names if is_ctunnel else [names[0]]}
     return {"available": False, "interface": None, "rx_bytes": None, "tx_bytes": None,
             "source": "not-attributable", "note": "No engine-native snapshot, enabled systemd accounting, or exact engine-derived interface was found."}
 
@@ -376,7 +387,7 @@ def summary(request: Request):
                      "tx_bytes": sum(int(x["tx_bytes"]) for x in measurable), "measured_tunnels": len(measurable),
                      "total_tunnels": len(tunnels), "coverage": "partial" if measurable and len(measurable) < len(tunnels) else ("complete" if measurable and len(measurable) == len(tunnels) else "unavailable"),
                      "source": "sum-of-verified-tunnel-counters"}
-    return {"version": "2.0.1", "tunnels": tunnels, "projects": projects, "traffic_total": traffic_total, "tunnel_count": len(tunnels),
+    return {"version": "2.3.6", "tunnels": tunnels, "projects": projects, "traffic_total": traffic_total, "tunnel_count": len(tunnels),
             "active_tunnels": active, "health_score": score, "disk_percent": disk_percent,
             "maintenance": maintenance, "generated_at": datetime.now(timezone.utc).isoformat(),
             "score_note": "Basic score uses verified disk usage and detected service state only; it is not a full reliability prediction."}
