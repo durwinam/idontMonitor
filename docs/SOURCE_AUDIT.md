@@ -1,4 +1,4 @@
-# Source audit notes for v2.0.1
+# Source audit notes for v2.2.1
 
 The integration was designed after inspecting the supplied `idontMonitor-v1.8.1.zip`, `C-Tunnel-main.zip`, `BackPack-main(1).zip`, and `paqet-tunnel-main(1).zip` archives.
 
@@ -26,7 +26,7 @@ The integration was designed after inspecting the supplied `idontMonitor-v1.8.1.
 - The supplied archive is an installation script, not the complete tunnel-engine source tree. The integration does not build, download, install, or reconfigure Paqet.
 - Detection uses resulting systemd unit names conservatively and excludes relay/watchdog helper units (`paqet-relay.service`, `paqet-auto-reset.service`, and `paqet-tunnel.service`) from tunnel counts and privileged service actions.
 
-## v2.0.1 update hardening
+## v2.2.1 update hardening
 
 - Release update prefers the exact uploaded `idontMonitor-vX.Y.Z.tar.gz` asset, checks GitHub asset digest when available, and validates the embedded version against the release tag.
 - Archive extraction rejects special files, path traversal, symlinks, and oversized expanded archives.
