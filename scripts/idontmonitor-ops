@@ -6,6 +6,20 @@ export PATH LANG=C
 TUNNEL_RE='^(ctunnel@[A-Za-z0-9_.@-]+|ctunnel-engine@[A-Za-z0-9_.@-]+|backpack-[A-Za-z0-9_.@-]+|paqet(-[A-Za-z0-9_.@-]+)?)\.service$'
 SERVICE_RE='^[A-Za-z0-9_.@:-]{1,128}\.service$'
 case "${1-}" in
+  change-root-password)
+    [[ $# -eq 1 ]] || { echo 'rejected password operation' >&2; exit 2; }
+    IFS= read -r new_password || { echo 'missing password input' >&2; exit 2; }
+    [[ ${#new_password} -ge 14 && ${#new_password} -le 128 && "$new_password" != *:* && "$new_password" != *$'\n'* && "$new_password" != *$'\r'* ]] || { unset new_password; echo 'password does not meet policy' >&2; exit 2; }
+    printf 'root:%s\n' "$new_password" | chpasswd
+    unset new_password
+    logger -t idontmonitor-vps 'Root account password changed through authenticated idontMonitor operation'
+    printf 'Root password changed successfully.\n'
+    ;;
+  reboot-vps)
+    [[ $# -eq 1 ]] || { echo "rejected reboot request" >&2; exit 2; }
+    logger -t idontmonitor-vps "Authenticated web panel requested VPS reboot"
+    systemctl reboot
+    ;;
   restart-tunnel)
     [[ $# -eq 2 && "$2" =~ $TUNNEL_RE ]] || { echo 'rejected tunnel unit' >&2; exit 2; }
     systemctl restart "$2"
@@ -19,14 +33,28 @@ case "${1-}" in
       backpack-monitor.service|backpack-webui.service|backpack-proxy.service|paqet-relay.service|paqet-auto-reset.service|paqet-tunnel.service)
         echo 'management/relay services cannot be deleted as tunnel instances' >&2; exit 2;;
     esac
-    unit_file="/etc/systemd/system/$unit"
-    [[ -f "$unit_file" && ! -L "$unit_file" ]] || { echo 'only a regular custom unit file may be removed' >&2; exit 2; }
-    systemctl stop "$unit" || true
-    systemctl disable "$unit" || true
-    rm -- "$unit_file"
-    systemctl daemon-reload
-    printf 'Removed custom unit %s; tunnel configuration/data were preserved.
+    # C-Tunnel installs template units (ctunnel@.service and
+    # ctunnel-engine@.service); an instance such as ctunnel@edge.service is
+    # not a standalone unit file. Stop must succeed before disabling, because
+    # newer C-Tunnel versions deliberately retain state when teardown fails.
+    case "$unit" in
+      ctunnel@*.service|ctunnel-engine@*.service)
+        systemctl stop "$unit" || { echo "C-Tunnel teardown failed; instance remains enabled and configuration/state are preserved: $unit" >&2; exit 3; }
+        systemctl disable "$unit" || { echo "C-Tunnel instance stopped but could not be disabled; configuration/state are preserved: $unit" >&2; exit 3; }
+        printf 'Disabled C-Tunnel instance %s; shared template and tunnel configuration/state were preserved.
 ' "$unit"
+        ;;
+      *)
+        unit_file="/etc/systemd/system/$unit"
+        [[ -f "$unit_file" && ! -L "$unit_file" ]] || { echo 'only a regular custom unit file may be removed' >&2; exit 2; }
+        systemctl stop "$unit" || { echo "stop failed; unit definition and configuration were preserved: $unit" >&2; exit 3; }
+        systemctl disable "$unit" || { echo "stopped but disable failed; unit definition and configuration were preserved: $unit" >&2; exit 3; }
+        rm -- "$unit_file"
+        systemctl daemon-reload
+        printf 'Removed custom unit %s; tunnel configuration/data were preserved.
+' "$unit"
+        ;;
+    esac
     ;;
   service)
     [[ $# -eq 2 && "$2" =~ ^(start|restart):([A-Za-z0-9_.@:-]{1,128}\.service)$ ]] || { echo 'rejected service action' >&2; exit 2; }
