@@ -5,13 +5,25 @@
 # idontMonitor
 ### پنل پایش سرور، منابع سیستم و وضعیت شبکه
 
-**نسخهٔ ۲.۰.۰** · توسعه‌دهنده: **durwinam**
+**نسخهٔ ۲.۲.۹** · توسعه‌دهنده: **durwinam**
 
 [مخزن گیت‌هاب](https://github.com/durwinam/idontMonitor) · [کانال تلگرام](https://t.me/idontproject)
 
 </div>
 
 ---
+
+## v2.3.4 security and UI notes
+
+- Root VPS password changes now require an authenticated, single-use server-side arithmetic CAPTCHA. The challenge expires after three minutes and is bound to the request IP and login session.
+- CAPTCHA issuance and password-change attempts are rate-limited. The ordinary dashboard login CAPTCHA and rate limits remain enabled.
+- API/login responses receive no-store cache headers and the application adds baseline browser security headers.
+- Persian/English strings cover the VPS password/reboot modal and CAPTCHA errors; the selected language is applied to dynamic UI text.
+- Telegram messages try mapped Premium custom emoji entities for CPU/RAM/Disk and other configured glyphs. If Telegram rejects the entities, the same message is retried with the exact original Unicode emoji. An explicit Premium eligibility rejection switches the worker to Unicode fallback; an individual invalid ID triggers only a per-message fallback. IDs can be overridden with `IDM_TELEGRAM_CUSTOM_EMOJI_IDS`.
+- Existing monitoring counters, traffic persistence, tunnel operations, updater behavior, and all eight themes are retained.
+
+**Deployment note:** CAPTCHA state is in process memory; the default installer runs one application worker. If you deliberately configure multiple workers, use a shared challenge store before enabling this flow across workers.
+
 
 ## معرفی
 
@@ -32,17 +44,22 @@
 
 
 
-## Operations & Tunnel Manager (v2.0.1)
 
-در نسخهٔ 2.0.1 قابلیت‌های مدیریت عملیات حفظ شده‌اند: شناسایی سرویس‌های تانل از systemd، ریستارت گروهی با تأیید، عیب‌یابی فقط‌خواندنی از فهرست مجاز، هشدارهای محلی، حالت تعمیر زمان‌دار، ثبت رویدادهای مدیریتی و پشتیبان‌گیری محدود از تنظیمات هشدار. اجرای شل دلخواه از پنل پشتیبانی نمی‌شود.
+## C-Tunnel 0.2.5 compatibility (v2.3.4)
+
+The tunnel manager now understands C-Tunnel's exact `ct-<name>` device and ECMP lane devices `ct-<name>.1` through `.7`; traffic totals include only interfaces matching the exact instance-derived names. C-Tunnel instances are managed through the shared `ctunnel@.service` / `ctunnel-engine@.service` templates, so removing an instance stops and disables that instance without deleting the shared template or tunnel config. If teardown fails, idontMonitor leaves the instance enabled and preserves its state/configuration record rather than hiding the failure.
+
+## Operations & Tunnel Manager (v2.3.4)
+
+در نسخهٔ 2.3.4 قابلیت‌های مدیریت عملیات حفظ شده‌اند: شناسایی سرویس‌های تانل از systemd، ریستارت گروهی با تأیید، عیب‌یابی فقط‌خواندنی از فهرست مجاز، هشدارهای محلی، حالت تعمیر زمان‌دار، ثبت رویدادهای مدیریتی و پشتیبان‌گیری محدود از تنظیمات هشدار. اجرای شل دلخواه از پنل پشتیبانی نمی‌شود.
 
 **محدودیت داده:** آمار ترافیک هر تانل فقط وقتی نمایش داده می‌شود که رابط شبکه با اطمینان به همان سرویس نگاشت شود. در غیر این صورت وضعیت «در دسترس نیست» نشان داده می‌شود. فایل Paqet ارائه‌شده در ورودی این نسخه اسکریپت نصب است؛ idontMonitor موتور Paqet را نصب یا پیکربندی نمی‌کند.
 
 **چرخش لاگ:** فایل فعال `idontmonitor.log` حداکثر 100 MiB است و سه فایل چرخیده نگه داشته می‌شوند. گزارش‌های systemd journal جداگانه تابع تنظیمات journald هستند.
 
-## مرکز به‌روزرسانی (v2.0.1)
+## مرکز به‌روزرسانی (v2.3.4)
 
-نسخهٔ 2.0.1 ابتدا Asset دقیق `idontMonitor-vX.Y.Z.tar.gz` را از Release رسمی دریافت می‌کند؛ فقط اگر Asset موجود نباشد از آرشیو خودکار تگ استفاده می‌کند. این مسیر به ZIP وابسته نیست.
+نسخهٔ 2.3.4 از Asset دقیق `idontMonitor-vX.Y.Z.tar.gz` را از Release رسمی دریافت می‌کند؛ فقط اگر Asset موجود نباشد از آرشیو خودکار تگ استفاده می‌کند. این مسیر به ZIP وابسته نیست.
 
 - `sudo idontMonitor update` آخرین GitHub Release پایدار را از آرشیو سورس `tar.gz` مربوط به Tag دریافت می‌کند.
 - `sudo idontMonitor update-main` سورس شاخهٔ `main` را بررسی می‌کند؛ این مسیر نسخهٔ داخل سورس را بررسی می‌کند و برای هر commit جدید، حتی با شماره نسخهٔ ثابت، پوشهٔ مستقل می‌سازد؛ برای محیط عملیاتی همچنان Release پایدار توصیه می‌شود.
@@ -167,3 +184,19 @@ sudo journalctl -u idontmonitor -n 100 --no-pager
 **© 2026 durwinam — تمامی حقوق محفوظ است.**
 
 </div>
+
+### VPS control center (v2.3.4)
+The VPS Management page displays live host facts and includes protected root-password change and reboot operations. Password changes use the fixed root-owned `idontmonitor-ops` helper; arbitrary commands are not accepted. Telegram password changes are admin-only, use a confirmation callback, and delete the incoming password message where Telegram permits. Use this feature only in a private bot chat, never in groups.
+
+## Safe extraction path
+
+The release archive is packaged inside a single `idontMonitor-v2.3.4/` directory. Extract it to a dedicated directory instead of the VPS filesystem root:
+
+```bash
+sudo install -d -m 0755 /opt/idontmonitor-source
+sudo unzip idontMonitor-v2.3.4.zip -d /opt/idontmonitor-source
+cd /opt/idontmonitor-source/idontMonitor-v2.3.4
+sudo bash ./install.sh
+```
+
+Extraction only unpacks the source. The installer installs the application to `/opt/idontmonitor`; do not unzip the archive directly into `/`.

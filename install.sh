@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
-VERSION="2.0.1"
+VERSION="2.3.6"
 REPO_URL="https://github.com/durwinam/idontMonitor"
 INSTALL_DIR="/opt/idontmonitor"
 CONFIG_DIR="/etc/idontmonitor"
@@ -215,6 +215,7 @@ if (( EXISTING_INSTALL )); then
   HTTPS_COOKIE_VALUE="$existing_cookie"
 fi
 INITIAL_PASSWORD=""
+INITIAL_USERNAME=""
 if [[ -s "$CONFIG_DIR/config.json" ]]; then
   # Existing installation: preserve credentials and never print a newly generated fake password.
   ADMIN_HASH="$(python3 - "$CONFIG_DIR/config.json" <<'PY'
@@ -228,19 +229,32 @@ PY
 )"
   [[ -n "$ADMIN_HASH" ]] || fail "Existing config has no valid admin password hash; refusing to overwrite credentials. Back up /etc/idontmonitor/config.json and repair it first."
 else
-  # Fresh installation: generate one random password and store only its scrypt hash.
-  INITIAL_PASSWORD="$(openssl rand -hex 18)"
-  ADMIN_HASH="$(python3 - "$INITIAL_PASSWORD" <<'PY'
-import hashlib,secrets,sys
-p=sys.argv[1].encode(); salt=secrets.token_bytes(16); n=16384; r=8; parallel=1
-d=hashlib.scrypt(p,salt=salt,n=n,r=r,p=parallel,dklen=32)
+  # Fresh install: random five-digit account ID and 24-character mixed-class password.
+  INITIAL_USERNAME="$(python3 - <<'PY'
+import secrets
+print(secrets.randbelow(90000) + 10000)
+PY
+)"
+  INITIAL_PASSWORD="$(python3 - <<'PY'
+import secrets
+lower='abcdefghijkmnopqrstuvwxyz'; upper='ABCDEFGHJKLMNPQRSTUVWXYZ'; digits='23456789'; special='!@#$%^&*()-_=+[]{}.?'
+chars=[secrets.choice(lower),secrets.choice(upper),secrets.choice(digits),secrets.choice(special)]
+chars += [secrets.choice(lower+upper+digits+special) for _ in range(20)]
+secrets.SystemRandom().shuffle(chars)
+print(''.join(chars))
+PY
+)"
+  ADMIN_HASH="$(python3 - 3<<<"$INITIAL_PASSWORD" <<'PY'
+import hashlib,secrets,os
+p=os.fdopen(3).read().rstrip("\n").encode(); salt=secrets.token_bytes(16); n=32768; r=8; parallel=1
+d=hashlib.scrypt(p,salt=salt,n=n,r=r,p=parallel,dklen=32,maxmem=512*1024*1024)
 print(f'scrypt${n}${r}${parallel}${salt.hex()}${d.hex()}')
 PY
 )"
 fi
 
 if [[ "$MODE" == "https" ]]; then HOSTS="\"$DOMAIN\",\"localhost\",\"127.0.0.1\""; else HOSTS="\"$PUBLIC_IP\",\"localhost\",\"127.0.0.1\""; fi
-python3 - "$CONFIG_DIR/config.json" "$VERSION" "$SESSION_SECRET" "$ADMIN_HASH" "$HOSTS" <<'PY'
+IDM_INITIAL_USERNAME="$INITIAL_USERNAME" python3 - "$CONFIG_DIR/config.json" "$VERSION" "$SESSION_SECRET" "$ADMIN_HASH" "$HOSTS" <<'PY'
 import json,sys,os,tempfile
 path,version,secret,pwhash,hosts=sys.argv[1:]
 allowed=[x.strip().strip('"') for x in hosts.split(',')]
@@ -250,7 +264,9 @@ if os.path.exists(path):
     cfg['allowed_hosts']=sorted(set((cfg.get('allowed_hosts') or []) + allowed))
     cfg.setdefault('panel_path','/')
 else:
-    cfg={"version":version,"session_secret":secret,"admin_user":"admin","admin_hash":pwhash,"allowed_hosts":allowed,"panel_path":"/"}
+    username=os.environ.get('IDM_INITIAL_USERNAME','')
+    if not username: raise SystemExit('Initial admin username was not generated; refusing insecure default credentials.')
+    cfg={"version":version,"session_secret":secret,"admin_user":username,"admin_hash":pwhash,"allowed_hosts":allowed,"panel_path":"/"}
 fd,tmp=tempfile.mkstemp(prefix='.config-',dir=os.path.dirname(path))
 with os.fdopen(fd,'w') as f:
     json.dump(cfg,f,indent=2); f.write('\n')
@@ -323,6 +339,9 @@ chmod 0755 "$INSTALL_DIR" "$INSTALL_DIR/releases" "$INSTALL_DIR/releases/$VERSIO
 find "$INSTALL_DIR/releases/$VERSION" -type d -exec chmod 0755 {} +
 find "$INSTALL_DIR/releases/$VERSION" -type f -exec chmod 0644 {} +
 install -m 0644 "$INSTALL_DIR/current/systemd/idontmonitor.service" /etc/systemd/system/idontmonitor.service
+install -m 0644 "$INSTALL_DIR/current/systemd/idontmonitor-telegram-bot.service" /etc/systemd/system/idontmonitor-telegram-bot.service
+install -d -o idontmonitor -g idontmonitor -m 0700 "$STATE_DIR"
+if [[ ! -e "$STATE_DIR/telegram-bot.json" ]]; then install -o idontmonitor -g idontmonitor -m 0600 /dev/null "$STATE_DIR/telegram-bot.json"; fi
 # Install a fixed root-owned updater. The web process can invoke only the `apply` action.
 install -o root -g root -m 0750 "$INSTALL_DIR/current/scripts/idontmonitor-update" /usr/local/sbin/idontmonitor-update
 printf '%s\n' 'idontmonitor ALL=(root) NOPASSWD: /usr/local/sbin/idontmonitor-update apply, /usr/local/sbin/idontmonitor-update apply-main' > /etc/sudoers.d/idontmonitor-update
@@ -373,6 +392,8 @@ visudo -cf /etc/sudoers.d/idontmonitor-ops >/dev/null || fail "Operations helper
 systemctl daemon-reload
 APP_START_OK=1
 systemctl enable idontmonitor >/dev/null 2>&1 || APP_START_OK=0
+systemctl enable idontmonitor-telegram-bot >/dev/null 2>&1 || APP_START_OK=0
+systemctl restart idontmonitor-telegram-bot >/dev/null 2>&1 || APP_START_OK=0
 systemctl restart idontmonitor >/dev/null 2>&1 || APP_START_OK=0
 if [[ "$MODE" == "https" ]]; then
   systemctl enable caddy >/dev/null 2>&1 || CADDY_START_OK=0
@@ -413,7 +434,7 @@ set -uo pipefail
 CONFIG=/etc/idontmonitor/config.json
 ENV_FILE=/etc/idontmonitor/environment
 STATE=/var/lib/idontmonitor/install-mode
-VERSION="2.0.1"
+VERSION="2.3.6"
 
 pause(){ read -r -p 'Press Enter to continue...' _ || true; }
 line(){ printf '%s\n' '------------------------------------------------------------'; }
@@ -422,7 +443,7 @@ update_check(){
   now=$(date +%s); cached_at=0; latest=''
   if [[ -r "$cache" ]]; then read -r cached_at latest < "$cache" || true; fi
   if [[ ! "$cached_at" =~ ^[0-9]+$ ]] || (( now-cached_at > 900 )) || [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    latest=$(curl -fsSL --connect-timeout 2 --max-time 4 -H 'Accept: application/vnd.github+json' -H 'User-Agent: idontMonitor-CLI/2.0.1' "https://api.github.com/repos/durwinam/idontMonitor/releases/latest" 2>/dev/null | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("tag_name", "")).lstrip("v"))' 2>/dev/null || true)
+    latest=$(curl -fsSL --connect-timeout 2 --max-time 4 -H 'Accept: application/vnd.github+json' -H 'User-Agent: idontMonitor-CLI/2.3.6' "https://api.github.com/repos/durwinam/idontMonitor/releases/latest" 2>/dev/null | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("tag_name", "")).lstrip("v"))' 2>/dev/null || true)
     if [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then printf '%s %s\n' "$now" "$latest" > "$cache" 2>/dev/null || true; else latest=''; fi
   fi
   if [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$(printf '%s\n%s\n' "$VERSION" "$latest" | sort -V | tail -1)" == "$latest" ]] && [[ "$latest" != "$VERSION" ]]; then
@@ -504,19 +525,33 @@ reset_panel_password(){
   echo "This will replace the web-panel admin password."
   read -r -p 'Type RESET to continue: ' confirm
   [[ "$confirm" == "RESET" ]] || { echo "Cancelled."; pause; return; }
-  local backup generated
+  local backup generated account_backup="" account_state="/var/lib/idontmonitor/account.json"
   backup="/etc/idontmonitor/config.json.backup-$(date +%Y%m%d-%H%M%S)"
   cp -p "$CONFIG" "$backup" || { echo "Could not create backup; no changes made."; pause; return; }
   chmod 0600 "$backup"
-  generated="$(openssl rand -hex 18)" || { echo "Password generation failed."; pause; return; }
-  if ! python3 - "$CONFIG" "$generated" <<'PY'
+  if [[ -s "$account_state" ]]; then
+    account_backup="/etc/idontmonitor/account.json.backup-$(date +%Y%m%d-%H%M%S)"
+    cp -p "$account_state" "$account_backup" || { echo "Could not back up account state; no changes made."; pause; return; }
+    chmod 0600 "$account_backup"
+  fi
+  generated="$(python3 - <<'PY'
+import secrets
+lower='abcdefghijkmnopqrstuvwxyz'; upper='ABCDEFGHJKLMNPQRSTUVWXYZ'; digits='23456789'; special='!@#$%^&*()-_=+[]{}.?'
+chars=[secrets.choice(lower),secrets.choice(upper),secrets.choice(digits),secrets.choice(special)]
+chars += [secrets.choice(lower+upper+digits+special) for _ in range(20)]
+secrets.SystemRandom().shuffle(chars)
+print(''.join(chars))
+PY
+)" || { echo "Password generation failed."; pause; return; }
+  if ! python3 - "$CONFIG" 3<<<"$generated" <<'PY'
 import hashlib,json,os,secrets,sys,tempfile
-path,password=sys.argv[1:]
+path=sys.argv[1]; password=os.fdopen(3).read().rstrip("\n")
 with open(path,encoding="utf-8") as f:
     cfg=json.load(f)
+if cfg.get("admin_user", "admin") == "admin": cfg["admin_user"] = str(secrets.randbelow(90000) + 10000)
 salt=secrets.token_bytes(16)
-n,r,p=16384,8,1
-digest=hashlib.scrypt(password.encode(),salt=salt,n=n,r=r,p=p,dklen=32)
+n,r,p=32768,8,1
+digest=hashlib.scrypt(password.encode(),salt=salt,n=n,r=r,p=p,dklen=32,maxmem=512*1024*1024)
 cfg["admin_hash"]=f"scrypt${n}${r}${p}${salt.hex()}${digest.hex()}"
 fd,tmp=tempfile.mkstemp(prefix=".config-reset-",dir=os.path.dirname(path))
 try:
@@ -539,17 +574,26 @@ PY
     echo "Password reset failed; original config restored."
     pause; return
   fi
+  # Config now contains the new credentials. Remove the overriding runtime account state
+  # so the application reads the reset credentials on its next start.
+  rm -f -- "$account_state"
   if systemctl restart idontmonitor; then
     echo
     echo "Password reset successful."
-    echo "Username: admin"
+    current_username="$(python3 - "$CONFIG" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1], encoding='utf-8')).get('admin_user',''))
+PY
+)"
+    echo "Username: $current_username"
     echo "New password (shown once): $generated"
     echo "Backup: $backup"
     echo "Save this password securely; it is not stored in plaintext."
   else
     cp -p "$backup" "$CONFIG"
+    if [[ -n "$account_backup" && -s "$account_backup" ]]; then install -o idontmonitor -g idontmonitor -m 0600 "$account_backup" "$account_state"; fi
     systemctl restart idontmonitor >/dev/null 2>&1 || true
-    echo "Service restart failed; previous config was restored."
+    echo "Service restart failed; previous credentials were restored."
   fi
   pause
 }
@@ -577,7 +621,7 @@ panel_menu(){
       4) journalctl -u idontmonitor -n 100 --no-pager; pause;;
       5) echo "Port changes require updating the service environment and, for HTTPS, the reverse-proxy config."; echo "This release intentionally does not apply a partial port change from CLI."; echo "Use the verified installer/upgrade workflow after a config backup."; pause;;
       6) echo "Entry IP/domain is installer metadata. Changing it does not change DNS or firewall rules."; echo "For HTTPS, use a domain with valid DNS and the Caddy TLS workflow."; pause;;
-      7) echo "Custom URL paths, SSL toggling, and access-control management are not implemented in v2.0.1."; echo "No configuration was changed."; pause;;
+      7) echo "Custom URL paths, SSL toggling, and access-control management are not implemented in v2.3.6."; echo "No configuration was changed."; pause;;
       8) reset_panel_password;;
       9) update_check; echo "To install a verified update, run: sudo idontMonitor update"; pause;;
       0) return;;
@@ -664,14 +708,24 @@ chmod 0755 /usr/local/bin/idontMonitor
 printf '\n\033[1;35m============================================================\033[0m\n'
 printf '\033[1;36m                    idontMonitor\033[0m\n'
 printf '\033[1;35m============================================================\033[0m\n'
-printf 'Version       : %s\nPanel URL     : %s\nAdmin username: admin\n' "$VERSION" "$PANEL_URL"
+printf 'Version       : %s\nPanel URL     : %s\n' "$VERSION" "$PANEL_URL"
+INSTALLED_USERNAME="$(python3 - "$CONFIG_DIR/config.json" <<'PYUSER'
+import json,sys
+try:
+    print(json.load(open(sys.argv[1], encoding="utf-8")).get("admin_user", "unknown"))
+except Exception:
+    print("unknown")
+PYUSER
+)"
+printf 'Admin username: %s\n' "$INSTALLED_USERNAME"
+if [[ -z "$INITIAL_USERNAME" ]]; then printf 'Existing credentials were preserved; password was not changed or displayed.\n'; fi
 if [[ -n "$INITIAL_PASSWORD" ]]; then
   printf 'Initial password: %s\n' "$INITIAL_PASSWORD"
   printf '\nIMPORTANT: Save this one-time password now. Only its hash is stored.\n'
 else
   printf '\nExisting credentials preserved. The installer did not change or reveal your password.\n'
 fi
-if [[ "$MODE" == "http" ]]; then printf '\033[1;31mWARNING: HTTP is unencrypted. Use only on a trusted network or switch to HTTPS.\033[0m\n'; else printf 'TLS: Caddy will obtain and renew the certificate automatically if DNS and ports 80/443 are reachable.\n'; fi
+if [[ "$MODE" == "http" ]]; then printf '\033[1;31mWARNING: HTTP is unencrypted and remote sign-in is blocked by the security policy. Configure HTTPS before remote login.\033[0m\n'; else printf 'TLS: Caddy will obtain and renew the certificate automatically if DNS and ports 80/443 are reachable.\n'; fi
 printf 'CLI: idontMonitor | Status: idontMonitor status | URL: idontMonitor url\n'
 printf '\nInstaller finished.\n'
 if (( HEALTH_OK == 1 )); then printf 'Application health: OK (127.0.0.1:%s)\n' "$APP_PORT"; else printf '\033[1;31mApplication health: FAILED (port %s)\033[0m\n' "$APP_PORT"; printf 'Check: journalctl -u idontmonitor -n 100 --no-pager\n'; systemctl status idontmonitor --no-pager -l || true; journalctl -u idontmonitor -n 40 --no-pager || true; fi
