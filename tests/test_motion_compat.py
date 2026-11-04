@@ -9,6 +9,6 @@ assert "-webkit-backdrop-filter" in css
 assert "100dvh" in css and "-webkit-fill-available" in css
 assert "prefers-reduced-motion: reduce" in js
 assert "Dashboard ready · telemetry may still be loading" in js
-assert "style.css?v=198" in html and "app.js?v=198" in html
+assert "style.css?v=4020" in html and "app.js?v=4020" in html
 assert "@import url('');" not in css
 print("Motion, viewport, reduced-motion and loader regression checks passed.")
