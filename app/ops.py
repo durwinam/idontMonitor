@@ -1,4 +1,4 @@
-"""Restricted operations API for idontMonitor v2.3.6.
+"""Restricted operations API for idontMonitor v4.0.2.
 
 All mutating system operations pass through a fixed root-owned helper. No API
 accepts a shell command, executable path, or arbitrary systemd unit name.
@@ -7,11 +7,17 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import re
+import socket
+import statistics
 import shutil
 import subprocess
 import tempfile
 import time
+import tomllib
+import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,7 +25,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+API_VERSION = "4.0.2"
 router = APIRouter(prefix="/api/ops", tags=["operations"])
+# No files were deleted. Analyzer scans remain read-only unless a separately
+# authorized managed-log cleanup action is explicitly confirmed.
 STATE_DIR = Path(os.environ.get("IDONTMONITOR_STATE_DIR", "/var/lib/idontmonitor"))
 AUDIT_PATH = STATE_DIR / "audit-log.json"
 MAINTENANCE_PATH = STATE_DIR / "maintenance.json"
@@ -107,16 +116,23 @@ def _unit_exec_metadata(unit: str) -> tuple[str, list[Path]]:
     candidates: list[str] = []
     candidates.extend(re.findall(r"(?:^|\s)-c\s+(/etc/backpack/[A-Za-z0-9_.-]+\.toml)(?=\s|[;}])", raw))
     candidates.extend(re.findall(r"(/[A-Za-z0-9_./-]+\.(?:json|ya?ml|toml|conf))(?=\s|[;}])", raw, re.I))
-    m = re.fullmatch(r"backpack-client-([A-Za-z0-9_.-]+)\.service", unit)
+    m = re.fullmatch(r"backpack-([A-Za-z0-9_.-]+)\.service", unit)
     if m:
-        candidates.append(f"/etc/backpack/client-{m.group(1)}.toml")
+        # BackPack app.ConfigDir is /etc/backpack; config and metrics use the
+        # tunnel name directly (name.toml / name.metrics.json), not client-name.
+        candidates.append(f"/etc/backpack/{m.group(1)}.toml")
+    m = re.fullmatch(r"ctunnel(?:-engine)?@([A-Za-z0-9_.-]+)\.service", unit)
+    if m:
+        # C-Tunnel's canonical catalog is /etc/ctunnel/state.json; per-instance
+        # engine env is under /etc/ctunnel/tunnels/<name>.env.
+        candidates.extend(["/etc/ctunnel/state.json", f"/etc/ctunnel/tunnels/{m.group(1)}.env"])
     paths: list[Path] = []; seen: set[str] = set()
     for value in candidates:
         if value in seen: continue
         seen.add(value); path=Path(value)
         try:
             resolved=path.resolve(strict=True)
-            allowed=(resolved.is_relative_to(Path("/etc/backpack").resolve()) or resolved.is_relative_to(Path("/etc/paqet").resolve()))
+            allowed=(resolved.is_relative_to(Path("/etc/backpack").resolve()) or resolved.is_relative_to(Path("/etc/paqet").resolve()) or resolved.is_relative_to(Path("/etc/ctunnel").resolve()))
             if path.is_absolute() and allowed and resolved.is_file() and resolved.stat().st_size <= 256_000:
                 paths.append(resolved)
         except (OSError, RuntimeError): continue
@@ -328,8 +344,17 @@ def _audit(action: str, target: str, result: str, request: Request) -> None:
 
 
 def _helper(action: str, target: str = "") -> tuple[bool, str]:
-    if not HELPER.is_file() or not os.access(HELPER, os.X_OK):
-        return False, "Restricted operations helper is not installed; mutating operations are disabled."
+    # The helper is intentionally root:root 0750. Checking os.access(X_OK)
+    # as the unprivileged web user falsely reports it as non-executable even
+    # though sudo is allowed to execute it. Validate its trusted metadata here;
+    # let sudo perform the actual privileged execution check.
+    try:
+        st = HELPER.lstat()
+        if (not __import__("stat").S_ISREG(st.st_mode) or st.st_uid != 0
+                or not (st.st_mode & 0o100) or HELPER.is_symlink()):
+            return False, "Restricted operations helper is missing or failed root ownership/permission checks. Run the official installer/update as root."
+    except OSError:
+        return False, "Restricted operations helper is not installed. Run the official installer/update as root."
     args = ["sudo", "-n", str(HELPER), action]
     if target:
         args.append(target)
@@ -347,6 +372,261 @@ class RestartRequest(BaseModel):
 class ServiceAction(BaseModel):
     action: str = Field(pattern="^(start|restart)$")
     confirm: bool = False
+
+
+
+# Version 3 resource/tunnel intelligence. Every probe is bounded and read-only.
+MANAGED_LOG_DIR = Path(os.environ.get("IDONTMONITOR_LOG_DIR", "/var/log/idontmonitor"))
+MANAGED_LOG_NAMES = ("idontmonitor.log", "idontmonitor.log.1", "idontmonitor.log.2", "idontmonitor.log.3")
+LOG_MANAGER_SETTINGS = STATE_DIR / "log-manager.json"
+
+
+def _safe_managed_logs() -> list[dict[str, Any]]:
+    """Return only known regular, non-symlink app log files under the configured directory."""
+    items = []
+    try:
+        base = MANAGED_LOG_DIR.resolve(strict=True)
+        if not base.is_dir() or MANAGED_LOG_DIR.is_symlink():
+            return []
+    except (OSError, RuntimeError):
+        return []
+    for name in MANAGED_LOG_NAMES:
+        candidate = MANAGED_LOG_DIR / name
+        try:
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            resolved = candidate.resolve(strict=True)
+            if resolved.parent != base or not resolved.is_relative_to(base):
+                continue
+            st = resolved.stat()
+            if not __import__("stat").S_ISREG(st.st_mode):
+                continue
+            items.append({"name": name, "path": str(resolved), "size_bytes": st.st_size,
+                          "modified_at": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+                          "managed": True, "deletable": True})
+        except (OSError, RuntimeError):
+            continue
+    return sorted(items, key=lambda x: (-x["size_bytes"], x["name"]))
+
+
+def _read_log_manager_settings() -> dict[str, Any]:
+    try:
+        data = json.loads(LOG_MANAGER_SETTINGS.read_text(encoding="utf-8"))
+        cap = int(data.get("cap_bytes", 1024**3))
+        if not 64 * 1024**2 <= cap <= 10 * 1024**3:
+            raise ValueError("invalid cap")
+        return {"cap_bytes": cap, "enabled": bool(data.get("enabled", True))}
+    except (OSError, ValueError, TypeError):
+        return {"cap_bytes": 1024**3, "enabled": True}
+
+
+def _atomic_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="." + path.name + ".", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False)
+            stream.flush(); os.fsync(stream.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        try: os.unlink(tmp)
+        except OSError: pass
+
+
+def _clean_endpoint_host(value: Any) -> str | None:
+    """Normalize an engine-reported peer (host, host:port, or [IPv6]:port)."""
+    if not isinstance(value, str):
+        return None
+    host = value.strip().strip("\\\"'")
+    if not host:
+        return None
+    if host.startswith("[") and "]" in host:
+        host = host[1:host.index("]")]
+    elif host.count(":") == 1:
+        maybe_host, maybe_port = host.rsplit(":", 1)
+        if maybe_port.isdigit():
+            host = maybe_host
+    if host.lower() in {"localhost", "0.0.0.0", "::", "127.0.0.1", "*"}:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_.:%-]{1,253}", host):
+        return None
+    try:
+        socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        return host
+    except (OSError, UnicodeError):
+        return None
+
+
+def _ctunnel_config(name: str) -> dict[str, Any] | None:
+    """Read one exact C-Tunnel entry from its canonical Store state."""
+    state = Path("/etc/ctunnel/state.json")
+    try:
+        if state.is_symlink() or not state.is_file() or state.stat().st_size > 512_000:
+            return None
+        data = json.loads(state.read_text(encoding="utf-8"))
+        tunnels = data.get("tunnels", []) if isinstance(data, dict) else []
+        for tunnel in tunnels:
+            if isinstance(tunnel, dict) and tunnel.get("name") == name:
+                return tunnel
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _backpack_snapshot_for_unit(unit: str) -> dict[str, Any] | None:
+    """Read BackPack's native snapshot from /etc/backpack/<instance>.metrics.json."""
+    match = re.fullmatch(r"backpack-([A-Za-z0-9_.-]+)\.service", unit)
+    if not match:
+        return None
+    path = Path("/etc/backpack") / f"{match.group(1)}.metrics.json"
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 128_000:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("name") not in (None, match.group(1)):
+            return None
+        taken = data.get("taken")
+        age = None
+        if isinstance(taken, str):
+            try:
+                stamp = datetime.fromisoformat(taken.replace("Z", "+00:00"))
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=timezone.utc)
+                age = max(0.0, (datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds())
+            except ValueError:
+                pass
+        return {"peer": data.get("peer"), "connected": data.get("connected"),
+                "snapshot_age_seconds": age, "snapshot_fresh": age is not None and age <= 90,
+                "taken": taken, "role": data.get("role"), "transport": data.get("transport")}
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _endpoint_info_for_unit(unit: str) -> dict[str, Any]:
+    """Return a verified endpoint and, where possible, the correct tunnel device."""
+    ct = re.fullmatch(r"ctunnel(?:-engine)?@([A-Za-z0-9_.-]+)\.service", unit)
+    if ct:
+        name = ct.group(1)
+        cfg = _ctunnel_config(name) or {}
+        remote = _clean_endpoint_host(cfg.get("remote_ip"))
+        reverse = bool(cfg.get("reverse"))
+        tun_remote = _clean_endpoint_host(cfg.get("tun_remote4"))
+        # Reverse C-Tunnel listeners intentionally use 0.0.0.0 as RemoteIP.
+        # Probe the configured inner peer through the exact ct-<name> device.
+        if reverse or remote is None:
+            if tun_remote:
+                return {"host": tun_remote, "interface": "ct-" + name,
+                        "source": "ctunnel-tun-remote4", "mode": "tunnel-peer"}
+            return {"host": None, "interface": None, "source": "ctunnel-reverse-no-peer",
+                    "mode": "unavailable"}
+        return {"host": remote, "interface": None, "source": "ctunnel-remote-ip",
+                "mode": "underlay-endpoint"}
+    bp = re.fullmatch(r"backpack-([A-Za-z0-9_.-]+)\.service", unit)
+    if bp:
+        snap = _backpack_snapshot_for_unit(unit)
+        # Peer is authoritative only while the native snapshot is fresh and
+        # the engine explicitly confirms a connected peer.
+        if snap and snap.get("snapshot_fresh") and snap.get("connected") is True:
+            peer = _clean_endpoint_host(snap.get("peer"))
+            if peer:
+                return {"host": peer, "interface": None, "source": "backpack-native-peer",
+                        "mode": "connected-peer", "native": snap}
+        # A fresh snapshot saying disconnected must not fall back to stale config
+        # and display a misleading green/reachable peer.
+        if snap and snap.get("snapshot_fresh") and snap.get("connected") is False:
+            return {"host": None, "interface": None, "source": "backpack-native-disconnected",
+                    "mode": "disconnected", "native": snap}
+    # Generic fallback remains limited to exact config fields and safe roots.
+    candidates: list[str] = []
+    if bp:
+        name = bp.group(1)
+        config = Path("/etc/backpack") / f"{name}.toml"
+        try:
+            if config.is_file() and not config.is_symlink() and config.stat().st_size <= 256_000:
+                parsed = tomllib.loads(config.read_text(encoding="utf-8"))
+                sections = [parsed] + [v for v in parsed.values() if isinstance(v, dict)]
+                for section in sections:
+                    for key in ("server", "remote", "endpoint", "peer", "server_addr", "remote_addr", "remote_address"):
+                        value = section.get(key)
+                        if isinstance(value, str): candidates.append(value)
+                        elif isinstance(value, dict):
+                            candidates.extend(str(value[k]) for k in ("host", "address", "ip") if isinstance(value.get(k), str))
+        except (OSError, ValueError, tomllib.TOMLDecodeError):
+            pass
+    _, configs = _unit_exec_metadata(unit)
+    for path in configs:
+        try:
+            if path.is_symlink() or path.stat().st_size > 256_000:
+                continue
+            raw = path.read_text(encoding="utf-8", errors="ignore")
+            candidates.extend(re.findall(
+                r'(?im)^\s*(?:server|endpoint|remote|address|host|peer|server_addr|remote_addr|server_address|remote_address|remote_ip|RemoteIP|REMOTE_IP)\s*[:=]\s*["\\\']?([A-Za-z0-9_.:%-]{1,253})', raw))
+        except OSError:
+            continue
+    for candidate in candidates:
+        host = _clean_endpoint_host(candidate)
+        if host:
+            return {"host": host, "interface": None, "source": "verified-config-fallback",
+                    "mode": "underlay-endpoint"}
+    return {"host": None, "interface": None, "source": "no-verified-endpoint", "mode": "unavailable"}
+
+
+def _endpoint_for_unit(unit: str) -> str | None:
+    """Backward-compatible endpoint resolver."""
+    return _endpoint_info_for_unit(unit).get("host")
+
+
+def _ping_endpoint(host: str, interface: str | None = None) -> dict[str, Any]:
+    """One bounded ICMP probe. This measures configured endpoint reachability, not data-plane latency."""
+    if not shutil.which("ping"):
+        return {"available": False, "status": "unsupported", "latency_ms": None, "note": "ping utility unavailable"}
+    command = [shutil.which("ping") or "ping", "-n", "-c", "1", "-W", "1"]
+    if interface and re.fullmatch(r"ct-[a-z0-9-]{1,12}", interface):
+        command.extend(["-I", interface])
+    command.append(host)
+    result = _run(command, 2.5)
+    if result is None:
+        return {"available": False, "status": "timeout", "latency_ms": None, "note": "probe timed out"}
+    match = re.search(r"time[=<]([0-9]+(?:\.[0-9]+)?)\s*ms", result.stdout or "")
+    if result.returncode == 0 and match:
+        label = "ICMP through the configured tunnel interface; not application RTT" if interface else "ICMP to configured underlay endpoint; not end-to-end tunnel latency"
+        return {"available": True, "status": "reachable", "latency_ms": float(match.group(1)), "note": label}
+    return {"available": False, "status": "unreachable", "latency_ms": None, "note": "endpoint did not answer ICMP; ICMP may be filtered"}
+
+
+def _proc_start_ticks(proc: Path) -> int | None:
+    try:
+        raw = (proc / "stat").read_text(encoding="ascii", errors="ignore")
+        tail = raw[raw.rfind(")") + 2:].split()
+        return int(tail[19])  # field 22 (starttime), after pid/comm/state prefix
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _ram_top5() -> list[dict[str, Any]]:
+    """Read /proc process data without shell commands; exclude kernel/system-owned and PID 1."""
+    rows = []
+    try:
+        page = os.sysconf("SC_PAGE_SIZE")
+        for proc in Path("/proc").iterdir():
+            if not proc.name.isdigit() or proc.name == "1": continue
+            try:
+                status = (proc / "status").read_text(encoding="utf-8", errors="ignore")
+                vals = dict(re.findall(r"^(Name|State|Uid|VmRSS):\s*(.+)$", status, re.M))
+                rss_match = re.match(r"(\d+)\s+kB", vals.get("VmRSS", ""))
+                if not rss_match: continue
+                uid = int(vals.get("Uid", "0").split()[0])
+                if uid == 0: continue
+                name = vals.get("Name", proc.name)[:128]
+                try: exe = os.readlink(proc / "exe")[:512]
+                except OSError: exe = "unavailable"
+                rows.append({"pid": int(proc.name), "name": name, "user": str(uid), "state": vals.get("State", "unknown")[:40],
+                             "ram_bytes": int(rss_match.group(1))*1024, "executable": exe, "start_ticks": _proc_start_ticks(proc)})
+            except (OSError, ValueError, PermissionError): continue
+    except OSError: return []
+    return sorted(rows, key=lambda x: x["ram_bytes"], reverse=True)[:5]
+
 
 class DeleteTunnelRequest(BaseModel):
     confirm: bool = False
@@ -369,6 +649,218 @@ class RestorePayload(BaseModel):
     alerts: AlertSettings = Field(default_factory=AlertSettings)
 
 
+
+
+@router.post("/analyzer/ram/{pid}/stop")
+def analyzer_stop_process(pid: int, payload: dict[str, Any], request: Request):
+    _auth(request)
+    if not payload.get("confirm") or pid <= 1:
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required")
+    proc = Path("/proc") / str(pid)
+    try:
+        status = (proc / "status").read_text(encoding="utf-8", errors="ignore")
+        vals = dict(re.findall(r"^(Name|Uid):\s*(.+)$", status, re.M))
+        uid = int(vals.get("Uid", "0").split()[0])
+        name = vals.get("Name", "unknown")
+        expected = payload.get("start_ticks")
+        current = _proc_start_ticks(proc)
+        if uid == 0 or name in {"systemd", "sshd", "dockerd", "containerd", "postgres", "redis-server", "idontmonitor"} or expected is None or current != int(expected):
+            raise HTTPException(status_code=403, detail="Process is protected or changed since scan")
+        os.kill(pid, signal.SIGTERM)
+    except HTTPException:
+        raise
+    except (OSError, ValueError, TypeError, ProcessLookupError):
+        raise HTTPException(status_code=409, detail="Process no longer exists or could not be stopped")
+    _audit("ram-process-stop", f"pid={pid};name={name}", "requested", request)
+    return {"ok": True, "detail": "SIGTERM sent; verify service health before stopping additional processes."}
+
+
+@router.post("/analyzer/ram/stop")
+def analyzer_stop_processes(payload: dict[str, Any], request: Request):
+    """Stop only explicitly selected, revalidated non-root user processes."""
+    _auth(request)
+    if not payload.get("confirm"):
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required")
+    targets = payload.get("processes", [])
+    if not isinstance(targets, list) or not targets or len(targets) > 40:
+        raise HTTPException(status_code=422, detail="Provide 1–40 scanned processes")
+    protected = {"systemd", "sshd", "dockerd", "containerd", "postgres", "redis-server", "idontmonitor"}
+    stopped: list[int] = []; skipped: list[int] = []
+    for target in targets:
+        try:
+            if not isinstance(target, dict):
+                skipped.append(0); continue
+            pid = int(target.get("pid", 0)); expected = int(target.get("start_ticks", -1))
+            if pid <= 1 or expected < 0:
+                skipped.append(pid); continue
+            proc = Path("/proc") / str(pid)
+            status = (proc / "status").read_text(encoding="utf-8", errors="ignore")
+            vals = dict(re.findall(r"^(Name|Uid):\s*(.+)$", status, re.M))
+            uid = int(vals.get("Uid", "0").split()[0]); name = vals.get("Name", "unknown")
+            if uid == 0 or name in protected or _proc_start_ticks(proc) != expected:
+                skipped.append(pid); continue
+            os.kill(pid, signal.SIGTERM); stopped.append(pid)
+        except (OSError, ValueError, TypeError, ProcessLookupError):
+            skipped.append(int(target.get("pid", 0)) if isinstance(target, dict) else 0)
+    _audit("ram-process-bulk-stop", f"stopped={stopped};skipped={skipped}", "requested", request)
+    return {"ok": True, "stopped": stopped, "skipped": skipped,
+            "detail": "SIGTERM sent only to eligible non-root processes; verify application health."}
+
+
+@router.post("/analyzer/disk/delete")
+def analyzer_delete_logs(payload: dict[str, Any], request: Request):
+    _auth(request)
+    if not payload.get("confirm"):
+        raise HTTPException(status_code=400, detail="Explicit confirmation is required")
+    requested = payload.get("names", [])
+    if not isinstance(requested, list) or not requested or len(requested) > len(MANAGED_LOG_NAMES):
+        raise HTTPException(status_code=422, detail="Provide one or more managed log names")
+    if any(name not in MANAGED_LOG_NAMES for name in requested):
+        raise HTTPException(status_code=403, detail="Only explicitly managed idontMonitor log files may be removed")
+    removed = []; errors = []
+    try:
+        MANAGED_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        base = MANAGED_LOG_DIR.resolve(strict=True)
+        if MANAGED_LOG_DIR.is_symlink() or not base.is_dir():
+            raise HTTPException(status_code=403, detail="Managed log directory failed safety checks")
+    except (OSError, RuntimeError):
+        raise HTTPException(status_code=404, detail="Managed log directory is unavailable")
+
+    # Never unlink the active log inode while Python handlers still hold it open.
+    # Flush, close and reopen the RotatingFileHandler under its lock so the next
+    # log record is written to a newly-created active file immediately.
+    active_name = "idontmonitor.log"
+    active_requested = active_name in requested
+    handlers = [h for h in logging.getLogger("idontmonitor").handlers
+                if isinstance(h, RotatingFileHandler)
+                and Path(h.baseFilename).resolve() == (base / active_name)]
+    if active_requested and handlers:
+        for handler in handlers:
+            try:
+                handler.acquire()
+                try:
+                    handler.flush()
+                    if handler.stream:
+                        handler.stream.close()
+                        handler.stream = None
+                    active = base / active_name
+                    if active.is_symlink():
+                        raise OSError("active log path is a symlink")
+                    active.unlink(missing_ok=True)
+                    handler.stream = handler._open()
+                    os.chmod(active, 0o600)
+                    removed.append(active_name)
+                finally:
+                    handler.release()
+            except OSError:
+                errors.append(active_name)
+    for name in dict.fromkeys(requested):
+        if name == active_name:
+            continue
+        target = base / name
+        try:
+            if target.is_symlink() or not target.is_file() or target.resolve(strict=True).parent != base:
+                errors.append(name); continue
+            target.unlink(); removed.append(name)
+        except OSError:
+            errors.append(name)
+    # Keep an active file present even on hosts where logging is initialized lazily.
+    active = base / active_name
+    if active_requested and not active.exists() and not active.is_symlink():
+        try:
+            fd = os.open(active, os.O_CREAT | os.O_APPEND | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            os.close(fd)
+            if active_name not in removed: removed.append(active_name)
+        except OSError:
+            if active_name not in errors: errors.append(active_name)
+    _audit("managed-log-clear", ",".join(removed), "success" if removed else "failed", request)
+    return {"ok": bool(removed), "removed": removed, "failed": errors,
+            "detail": "Managed logs were cleared. The active idontMonitor log file is recreated and ready for new records."}
+
+
+@router.get("/log-manager")
+def log_manager(request: Request):
+    _auth(request)
+    items = _safe_managed_logs(); settings = _read_log_manager_settings()
+    total = sum(x["size_bytes"] for x in items)
+    return {"settings": settings, "items": items, "total_bytes": total,
+            "cap_reached": total >= settings["cap_bytes"],
+            "rotation_policy": "Python RotatingFileHandler; active log + three rotated files; existing handler cap is 100 MiB per file.",
+            "deletion_enabled": False,
+            "safety_note": "The manager never deletes arbitrary files. Existing application log rotation is bounded; cap setting is informational until a validated runtime reconfiguration is available."}
+
+
+@router.post("/log-manager")
+def update_log_manager(payload: dict[str, Any], request: Request):
+    _auth(request)
+    try:
+        cap = int(payload.get("cap_bytes", 1024**3))
+        enabled = bool(payload.get("enabled", True))
+        if not 64 * 1024**2 <= cap <= 10 * 1024**3:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="cap_bytes must be between 64 MiB and 10 GiB")
+    # Persist settings atomically; do not trigger deletion or change open log files.
+    _atomic_json(LOG_MANAGER_SETTINGS, {"cap_bytes": cap, "enabled": enabled})
+    _audit("log-manager-settings", "managed-application-logs", "success", request)
+    return {"ok": True, "settings": {"cap_bytes": cap, "enabled": enabled},
+            "note": "Settings saved. No files were deleted; current handler rotation remains bounded at 100 MiB x 4 files."}
+
+
+def _backpack_engine_health(unit: str) -> dict[str, Any] | None:
+    match = re.fullmatch(r"backpack-([A-Za-z0-9_.-]+)\.service", unit)
+    if not match: return None
+    path = Path("/etc/backpack") / f"{match.group(1)}.metrics.json"
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 128_000: return {"state":"unknown","detail":"BackPack snapshot unavailable"}
+        data=json.loads(path.read_text(encoding="utf-8"))
+        taken=data.get("taken")
+        age=None
+        if isinstance(taken,str):
+            try: age=(datetime.now(timezone.utc)-datetime.fromisoformat(taken.replace("Z","+00:00"))).total_seconds()
+            except ValueError: pass
+        connected=data.get("connected")
+        if age is None or age>90: state="stale"
+        elif connected is True: state="online"
+        elif connected is False: state="offline"
+        elif connected is None: state="unknown"
+        else: state="unknown"
+        detail = {"online":"Engine confirms an active control peer; ICMP may still be filtered.",
+                  "offline":"Engine explicitly reports that the control peer is disconnected.",
+                  "stale":"Native metrics snapshot is older than 90 seconds; engine state is not current.",
+                  "unknown":"This engine snapshot does not contain an explicit connected state."}.get(state, "Native engine state unavailable")
+        return {"state":state,"peer":str(data.get("peer") or "")[:160],"connected":connected,
+                "transport":str(data.get("transport") or ""),"role":str(data.get("role") or ""),
+                "snapshot_age_seconds":round(age,1) if age is not None else None,"detail":detail}
+    except (OSError,ValueError,TypeError): return {"state":"unknown","detail":"BackPack snapshot could not be read"}
+
+
+@router.get("/tunnels/ping")
+def tunnel_pings(request: Request):
+    _auth(request)
+    rows = []
+    for item in detect_tunnels():
+        info = _endpoint_info_for_unit(item["unit"]) if item.get("active") else {"host": None, "interface": None, "source": "service-inactive", "mode": "unavailable"}
+        host = info.get("host")
+        if not host:
+            native = info.get("native") or (_backpack_snapshot_for_unit(item["unit"]) if item["unit"].startswith("backpack-") else None)
+            state = "disconnected" if info.get("mode") == "disconnected" else "unavailable"
+            ping = {"available": False, "status": state, "latency_ms": None,
+                    "note": ("BackPack engine reports no connected peer." if state == "disconnected" else
+                             "No verified peer/endpoint is available; service state alone is not tunnel health."),
+                    "source": info.get("source"), "native": native}
+        else:
+            ping = {**_ping_endpoint(host, info.get("interface")), "host": host,
+                    "interface": info.get("interface"), "source": info.get("source"),
+                    "mode": info.get("mode"), "native": info.get("native")}
+        engine_health = _backpack_engine_health(item["unit"]) if item["unit"].startswith("backpack-") else None
+        rows.append({"unit": item["unit"], "type": item["name"], "active": item["active"], "ping": ping,
+                     "engine_health": engine_health,
+                     "health_summary": ("Native BackPack peer connected; ICMP probe is independent" if engine_health and engine_health.get("state") == "online" and not ping.get("available") else None),
+                     "generated_at": datetime.now(timezone.utc).isoformat()})
+    return {"items": rows, "note": "ICMP endpoint reachability is not the same as end-to-end tunnel latency. Unavailable is not zero."}
+
+
 @router.get("/summary")
 def summary(request: Request):
     _auth(request)
@@ -387,7 +879,7 @@ def summary(request: Request):
                      "tx_bytes": sum(int(x["tx_bytes"]) for x in measurable), "measured_tunnels": len(measurable),
                      "total_tunnels": len(tunnels), "coverage": "partial" if measurable and len(measurable) < len(tunnels) else ("complete" if measurable and len(measurable) == len(tunnels) else "unavailable"),
                      "source": "sum-of-verified-tunnel-counters"}
-    return {"version": "2.3.6", "tunnels": tunnels, "projects": projects, "traffic_total": traffic_total, "tunnel_count": len(tunnels),
+    return {"version": "4.0.2", "tunnels": tunnels, "projects": projects, "traffic_total": traffic_total, "tunnel_count": len(tunnels),
             "active_tunnels": active, "health_score": score, "disk_percent": disk_percent,
             "maintenance": maintenance, "generated_at": datetime.now(timezone.utc).isoformat(),
             "score_note": "Basic score uses verified disk usage and detected service state only; it is not a full reliability prediction."}
@@ -436,21 +928,30 @@ def restart_all(request: Request, payload: RestartRequest):
 
 @router.delete("/tunnels/{unit}")
 def delete_tunnel(unit: str, payload: DeleteTunnelRequest, request: Request):
-    """Remove a detected tunnel service definition, never its config/data files."""
+    """Remove an explicitly confirmed tunnel instance using its engine-specific lifecycle."""
     _auth(request)
     if not payload.confirm:
         raise HTTPException(status_code=400, detail="Explicit confirmation is required.")
     if not TUNNEL_UNIT.fullmatch(unit) or unit in {"backpack-monitor.service", "backpack-webui.service", "backpack-proxy.service", "paqet-relay.service", "paqet-auto-reset.service", "paqet-tunnel.service"}:
         raise HTTPException(status_code=400, detail="This unit is not an eligible tunnel instance.")
-    # Require an installed custom unit file directly under /etc/systemd/system.
+    # C-Tunnel uses shared systemd template units; instances have no standalone
+    # file in /etc/systemd/system. Permit verified template instances while
+    # keeping management/relay units and arbitrary package services protected.
     unit_path = Path("/etc/systemd/system") / unit
-    if not unit_path.is_file() or unit_path.is_symlink():
-        raise HTTPException(status_code=409, detail="Only a regular custom unit file in /etc/systemd/system can be removed. Package-managed units are protected.")
+    if unit.startswith(("ctunnel@", "ctunnel-engine@")):
+        template = "ctunnel@.service" if unit.startswith("ctunnel@") else "ctunnel-engine@.service"
+        candidates = (Path("/etc/systemd/system") / template,
+                      Path("/usr/lib/systemd/system") / template,
+                      Path("/lib/systemd/system") / template)
+        if not any(p.is_file() and not p.is_symlink() for p in candidates):
+            raise HTTPException(status_code=409, detail="C-Tunnel template unit is not installed; refusing to remove an unknown instance.")
+    elif not unit_path.is_file() or unit_path.is_symlink():
+        raise HTTPException(status_code=409, detail="This tunnel has no verified custom unit file. Refresh detection or repair the service installation first.")
     ok, detail = _helper("delete-tunnel", unit)
     _audit("delete-tunnel", unit, "success" if ok else "failed", request)
     if not ok:
         raise HTTPException(status_code=409, detail=detail)
-    return {"ok": True, "unit": unit, "detail": detail, "configuration_preserved": True}
+    return {"ok": True, "unit": unit, "detail": detail, "configuration_preserved": not unit.startswith("backpack-") , "removed_configuration": unit.startswith("backpack-")}
 
 
 @router.get("/services")
@@ -608,6 +1109,151 @@ def import_backup(payload: RestorePayload, request: Request):
     _write_json_atomic(ALERTS_PATH, payload.alerts.model_dump())
     _audit("backup-restore", "operations-settings", "success", request)
     return {"ok": True, "message": "Operations preferences restored. Credentials and tunnel configurations were not included in this backup."}
+
+
+
+# Resource inspection is read-only; separately authenticated, allowlisted actions
+# below require explicit confirmation and revalidate process identity or log paths.
+def _decode_systemd_cgroup(value: str) -> str:
+    # systemd escapes arbitrary bytes as \xNN in unit/cgroup names.
+    return re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), value)
+
+
+def _pid_service(pid: int) -> str:
+    """Resolve the owning systemd service, including delegated/user cgroups and parents."""
+    current = pid
+    seen: set[int] = set()
+    for _ in range(6):
+        if current <= 1 or current in seen:
+            break
+        seen.add(current)
+        try:
+            raw = (Path('/proc') / str(current) / 'cgroup').read_text(encoding='utf-8', errors='ignore')
+            for line in raw.splitlines():
+                path = _decode_systemd_cgroup(line.rsplit(':', 1)[-1])
+                # Prefer the innermost service unit; scopes are a fallback only.
+                units = re.findall(r'([^/]+\.(?:service|scope))(?:/|$)', path)
+                services = [u for u in units if u.endswith('.service')]
+                if services:
+                    return services[-1]
+                if units:
+                    return units[-1]
+            status = (Path('/proc') / str(current) / 'status').read_text(encoding='utf-8', errors='ignore')
+            parent = re.search(r'^PPid:\s*(\d+)', status, re.M)
+            current = int(parent.group(1)) if parent else 0
+        except (OSError, ValueError, PermissionError):
+            break
+    return 'unassigned / user process'
+
+
+def _process_inventory() -> list[dict[str, Any]]:
+    rows=[]
+    try:
+        for proc in Path("/proc").iterdir():
+            if not proc.name.isdigit() or proc.name == "1": continue
+            try:
+                status=(proc/"status").read_text(encoding="utf-8", errors="ignore")
+                vals=dict(re.findall(r"^(Name|State|Uid|VmRSS):\s*(.+)$",status,re.M))
+                m=re.match(r"(\d+)\s+kB",vals.get("VmRSS",""))
+                if not m: continue
+                uid=int(vals.get("Uid","0").split()[0])
+                # Include root-owned daemons in accounting (postgres, redis, etc.).
+                # The UI/action endpoint still refuses stopping protected/root processes.
+                pid=int(proc.name); name=vals.get("Name",proc.name)[:128]
+                try: exe=os.readlink(proc/"exe")[:512]
+                except OSError: exe="unavailable"
+                try:
+                    argv=(proc/"cmdline").read_bytes().split(b"\0",1)[0].decode("utf-8",errors="replace")[:512]
+                except OSError: argv=""
+                service=_pid_service(pid)
+                rows.append({"pid":pid,"name":name,"user":str(uid),"state":vals.get("State","unknown")[:40],
+                    "ram_bytes":int(m.group(1))*1024,"executable":exe,"command":argv,"start_ticks":_proc_start_ticks(proc),"service":service})
+            except (OSError,ValueError,PermissionError): continue
+    except OSError: pass
+    return sorted(rows,key=lambda x:x["ram_bytes"],reverse=True)
+
+
+@router.get("/analyzer/ram")
+def analyze_ram(request: Request):
+    _auth(request)
+    processes=_process_inventory(); groups={}
+    for proc in processes:
+        key=proc["service"]
+        group=groups.setdefault(key,{"service":key,"ram_bytes":0,"process_count":0,"processes":[]})
+        group["ram_bytes"]+=proc["ram_bytes"]; group["process_count"]+=1
+        if len(group["processes"])<8:
+            group["processes"].append({k:proc[k] for k in ("pid","name","user","state","ram_bytes","executable","command","start_ticks")})
+    items=sorted(groups.values(),key=lambda x:x["ram_bytes"],reverse=True)[:5]
+    return {"items":items,"process_count":len(processes),"generated_at":datetime.now(timezone.utc).isoformat(),
+            "note":"Processes are attributed using their own systemd cgroup and up to five parent processes. Unknown ownership remains explicitly unassigned; command and executable are shown when available."}
+
+
+_DISK_ROOTS = (("BackPack",Path("/var/lib/backpack")),("BackPack config",Path("/etc/backpack")),
+    ("C-Tunnel",Path("/var/lib/ctunnel")),("C-Tunnel config",Path("/etc/ctunnel")),
+    ("idontMonitor",Path("/var/lib/idontmonitor")),("idontMonitor logs",MANAGED_LOG_DIR),
+    ("BackPack logs",Path("/var/log/backpack")),("C-Tunnel logs",Path("/var/log/ctunnel")))
+
+def _bounded_dir_size(root: Path, max_entries: int=5000, max_depth: int=5) -> tuple[int,int,bool]:
+    total=0; count=0; truncated=False; stack=[(root,0)]
+    while stack:
+        current,depth=stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    count+=1
+                    if count>max_entries: return total,count,True
+                    try:
+                        if entry.is_symlink(): continue
+                        if entry.is_file(follow_symlinks=False): total+=entry.stat(follow_symlinks=False).st_size
+                        elif entry.is_dir(follow_symlinks=False) and depth<max_depth: stack.append((Path(entry.path),depth+1))
+                    except OSError: continue
+        except OSError: continue
+    return total,count,truncated
+
+
+def _disk_top_entries(root: Path, limit: int = 4) -> list[dict[str, Any]]:
+    """Return largest immediate children; directories are measured with bounded no-follow scans."""
+    found: list[dict[str, Any]] = []
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_symlink():
+                        continue
+                    path = Path(entry.path)
+                    if entry.is_file(follow_symlinks=False):
+                        size = entry.stat(follow_symlinks=False).st_size
+                        kind = "file"
+                    elif entry.is_dir(follow_symlinks=False):
+                        size, _, _ = _bounded_dir_size(path, max_entries=1200, max_depth=3)
+                        kind = "directory"
+                    else:
+                        continue
+                    found.append({"name": entry.name[:160], "path": str(path), "size_bytes": size, "kind": kind})
+                except OSError:
+                    continue
+    except OSError:
+        return []
+    return sorted(found, key=lambda x: x["size_bytes"], reverse=True)[:limit]
+
+
+@router.get("/analyzer/disk")
+def analyze_disk(request: Request):
+    _auth(request)
+    items=[]
+    for label,root in _DISK_ROOTS:
+        try:
+            if root.is_symlink() or not root.is_dir(): continue
+            size,count,truncated=_bounded_dir_size(root)
+            if count: items.append({"name":label,"path":str(root),"size_bytes":size,"entries_scanned":count,
+                "top_entries":_disk_top_entries(root),"truncated":truncated,"category":"service-footprint","deletion_allowed":False})
+        except OSError: continue
+    items.sort(key=lambda x:x["size_bytes"],reverse=True)
+    logs=_safe_managed_logs()
+    return {"items":items[:5],"managed_logs":logs[:5],"managed_total_bytes":sum(x["size_bytes"] for x in logs),
+        "generated_at":datetime.now(timezone.utc).isoformat(),
+        "note":"Bounded, no-symlink service footprint scan. Service directories are informational and cannot be bulk-deleted. Only separately listed managed logs have restricted cleanup policy. No files were deleted by scanning."}
+
 
 @router.get("/terminal")
 def terminal_catalog(request: Request):

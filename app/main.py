@@ -7,6 +7,7 @@ from pathlib import Path
 import os, time, secrets, hashlib, hmac, json, socket, platform, shutil, subprocess, datetime, tempfile, re, fcntl, urllib.request, urllib.error, statistics, logging
 from logging.handlers import RotatingFileHandler
 from collections import defaultdict, deque
+import sqlite3
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -17,7 +18,7 @@ def load_config():
     try:
         cfg = json.loads(CONFIG_PATH.read_text())
     except Exception:
-        cfg = {"version":"2.3.6", "panel_path":"/", "session_secret":"", "admin_hash":"", "allowed_hosts":["localhost","127.0.0.1"]}
+        cfg = {"version":"4.0.2", "panel_path":"/", "session_secret":"", "admin_hash":"", "allowed_hosts":["localhost","127.0.0.1"]}
     # Mutable account credentials live in service-owned state, not the root-owned deployment config.
     try:
         account = json.loads(ACCOUNT_STATE_PATH.read_text())
@@ -29,7 +30,54 @@ def load_config():
     return cfg
 
 CFG = load_config()
-app = FastAPI(title="idontMonitor", version="2.3.6", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="idontMonitor", version="4.0.2", docs_url=None, redoc_url=None, openapi_url=None)
+# Bounded in-memory HTTP request telemetry for the Anti-DDoS console.
+# Detection is advisory only: legitimate clients are never auto-blocked.
+REQUEST_TELEMETRY = {"lock": __import__("threading").Lock(), "events": deque(maxlen=20000), "per_ip": {}, "alerts": deque(maxlen=200), "blocked_until": {}}
+SECURITY_DB = Path(os.environ.get("IDM_SECURITY_DB", "/var/lib/idontmonitor/security-traffic.sqlite3"))
+SECURITY_SETTINGS = Path(os.environ.get("IDM_SECURITY_SETTINGS", "/var/lib/idontmonitor/security.json"))
+SECURITY_DEFAULTS = {"protection_enabled": False, "mitigation_threshold_10s": 600, "mitigation_seconds": 60}
+_SECURITY_DB_READY = False
+_SECURITY_DB_LOCK = __import__("threading").Lock()
+
+def _security_db():
+    global _SECURITY_DB_READY
+    SECURITY_DB.parent.mkdir(parents=True, exist_ok=True)
+    db=sqlite3.connect(str(SECURITY_DB), timeout=2)
+    if not _SECURITY_DB_READY:
+        with _SECURITY_DB_LOCK:
+            if not _SECURITY_DB_READY:
+                db.execute("PRAGMA journal_mode=WAL")
+                db.execute("CREATE TABLE IF NOT EXISTS request_minutes (minute INTEGER PRIMARY KEY, requests INTEGER NOT NULL, clients INTEGER NOT NULL DEFAULT 0)")
+                db.execute("CREATE TABLE IF NOT EXISTS request_sources (minute INTEGER NOT NULL, ip TEXT NOT NULL, requests INTEGER NOT NULL, PRIMARY KEY(minute,ip))")
+                db.commit()
+                _SECURITY_DB_READY=True
+    return db
+
+def _security_config():
+    try:
+        data=json.loads(SECURITY_SETTINGS.read_text())
+        if isinstance(data,dict): return {**SECURITY_DEFAULTS, **data}
+    except Exception: pass
+    return dict(SECURITY_DEFAULTS)
+
+def _save_security_config(data):
+    SECURITY_SETTINGS.parent.mkdir(parents=True,exist_ok=True)
+    fd,tmp=tempfile.mkstemp(prefix='.security-',dir=str(SECURITY_SETTINGS.parent))
+    with os.fdopen(fd,'w') as f: json.dump(data,f); f.flush(); os.fsync(f.fileno())
+    os.chmod(tmp,0o600); os.replace(tmp,SECURITY_SETTINGS)
+
+def _record_request_persistently(now, ip):
+    minute=int(now)//60*60
+    try:
+        db=_security_db()
+        db.execute("INSERT INTO request_minutes(minute,requests,clients) VALUES(?,1,1) ON CONFLICT(minute) DO UPDATE SET requests=requests+1",(minute,))
+        db.execute("INSERT INTO request_sources(minute,ip,requests) VALUES(?,?,1) ON CONFLICT(minute,ip) DO UPDATE SET requests=requests+1",(minute,ip[:64]))
+        db.execute("DELETE FROM request_minutes WHERE minute < ?",(int(now)-86400,))
+        db.execute("DELETE FROM request_sources WHERE minute < ?",(int(now)-86400,))
+        db.commit(); db.close()
+    except Exception: pass
+
 # Bounded application log: 100 MiB active file plus three rotated files.
 logger = logging.getLogger("idontmonitor")
 logger.setLevel(logging.INFO)
@@ -60,6 +108,42 @@ app.add_middleware(SessionMiddleware, secret_key=CFG.get("session_secret") or se
 allowed_hosts = CFG.get("allowed_hosts") or ["localhost", "127.0.0.1"]
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts + ["*.localhost"])
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+@app.middleware("http")
+async def request_rate_telemetry(request: Request, call_next):
+    ip=client_ip(request); now=time.time(); blocked=False; count=0
+    try:
+        with REQUEST_TELEMETRY["lock"]:
+            per_ip=REQUEST_TELEMETRY["per_ip"]
+            if len(per_ip)>20000:
+                for old_ip,q in list(per_ip.items()):
+                    if not q or q[-1]<now-60: per_ip.pop(old_ip,None)
+            q=per_ip.setdefault(ip,deque()); q.append(now)
+            while q and q[0]<now-10: q.popleft()
+            count=len(q)
+            until=REQUEST_TELEMETRY["blocked_until"].get(ip,0)
+            if until<=now: REQUEST_TELEMETRY["blocked_until"].pop(ip,None)
+            cfg=_security_config()
+            # Conservative single-source mitigation. Monitoring is always on;
+            # mitigation is impossible unless the operator explicitly enables it.
+            if cfg.get("protection_enabled") and (until>now or count>=int(cfg.get('mitigation_threshold_10s',600))):
+                blocked=True
+                if until<=now: REQUEST_TELEMETRY["blocked_until"][ip]=now+int(cfg.get('mitigation_seconds',60))
+                if not REQUEST_TELEMETRY["alerts"] or REQUEST_TELEMETRY["alerts"][-1].get('ip')!=ip or now-REQUEST_TELEMETRY["alerts"][-1].get('timestamp',0)>30:
+                    REQUEST_TELEMETRY["alerts"].append({"timestamp":now,"ip":ip,"requests_10s":count,"severity":"high","status":"temporarily_rate_limited"})
+        if blocked:
+            response=JSONResponse({"detail":"Temporarily rate-limited by idontShield due to an unusually high single-source request rate."},status_code=429)
+        else:
+            response=await call_next(request)
+        _record_request_persistently(now,ip)
+        with REQUEST_TELEMETRY["lock"]:
+            events=REQUEST_TELEMETRY["events"]; events.append((now,ip,request.url.path[:120],int(response.status_code)))
+            while events and events[0][0]<now-60: events.popleft()
+            if count>=120 and (not REQUEST_TELEMETRY["alerts"] or REQUEST_TELEMETRY["alerts"][-1].get("ip")!=ip or now-REQUEST_TELEMETRY["alerts"][-1].get("timestamp",0)>60):
+                REQUEST_TELEMETRY["alerts"].append({"timestamp":now,"ip":ip,"requests_10s":count,"severity":"elevated" if count<600 else "high","status":"observed"})
+        return response
+    except Exception:
+        return await call_next(request)
 
 @app.middleware("http")
 async def security_response_headers(request: Request, call_next):
@@ -378,7 +462,7 @@ def check_github_update(force=False):
             return {**UPDATE_CACHE["result"], "cached": True}
         req = urllib.request.Request(
             f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest",
-            headers={"Accept":"application/vnd.github+json", "User-Agent":"idontMonitor-UpdateChecker/2.3.6", "X-GitHub-Api-Version":"2022-11-28"})
+            headers={"Accept":"application/vnd.github+json", "User-Agent":"idontMonitor-UpdateChecker/4.0.2", "X-GitHub-Api-Version":"2022-11-28"})
         try:
             with urllib.request.urlopen(req, timeout=6) as response:
                 release = json.loads(response.read(1024 * 1024).decode("utf-8"))
@@ -434,7 +518,7 @@ def update_apply(request: Request):
 
 
 @app.get('/healthz')
-def health(): return {"ok":True,"version":CFG.get('version','2.3.6')}
+def health(): return {"ok":True,"version":CFG.get('version','4.0.2')}
 
 def _cmd_ok(args):
     try:
@@ -442,6 +526,35 @@ def _cmd_ok(args):
         return result.returncode == 0, result.stdout.strip()
     except Exception:
         return False, ''
+
+@app.get('/api/security/traffic')
+def security_traffic(request: Request):
+    require_auth(request)
+    now=time.time(); cfg=_security_config()
+    with REQUEST_TELEMETRY["lock"]:
+        rows=list(REQUEST_TELEMETRY["events"]); alerts=list(REQUEST_TELEMETRY["alerts"])[-30:]
+        per_ip={ip:len(q) for ip,q in REQUEST_TELEMETRY["per_ip"].items() if q and q[-1]>=now-10}
+    recent=[r for r in rows if r[0]>=now-60]; total10=sum(per_ip.values())
+    top=sorted(per_ip.items(),key=lambda x:x[1],reverse=True)[:10]
+    history=[]
+    try:
+        db=_security_db(); history=[{"minute":int(m),"requests":int(n)} for m,n in db.execute("SELECT minute,requests FROM request_minutes WHERE minute>=? ORDER BY minute",(int(now)-86400,)).fetchall()]; db.close()
+    except Exception: pass
+    total24=sum(x['requests'] for x in history)
+    return {"observed":True,"window_seconds":60,"requests_last_minute":len(recent),"requests_per_second_10s":round(total10/10,2),
+            "unique_clients_60s":len({r[1] for r in recent}),"top_clients_10s":[{"ip":ip,"requests":count} for ip,count in top],
+            "alerts":alerts,"auto_blocking":bool(cfg.get('protection_enabled')),"protection_enabled":bool(cfg.get('protection_enabled')),
+            "history_24h":history,"requests_24h":total24,
+            "mitigation":"When enabled, a single source exceeding 600 requests/10 seconds is temporarily rate-limited for 60 seconds. This is a conservative application-layer guard, not proof of DDoS and not upstream volumetric protection.","note":"Persistent 24-hour HTTP request telemetry. Only requests reaching this application are visible; upstream volumetric attacks require network-provider mitigation."}
+
+@app.post('/api/security/protection')
+def security_protection(request: Request, payload: dict):
+    require_auth(request)
+    enabled=payload.get('enabled')
+    if type(enabled) is not bool: raise HTTPException(status_code=400,detail='enabled must be a boolean')
+    cfg=_security_config(); cfg['protection_enabled']=enabled; _save_security_config(cfg)
+    logger.warning('Anti-DDoS protection %s by authenticated dashboard user', 'enabled' if enabled else 'disabled')
+    return {"ok":True,"protection_enabled":enabled,"message":"Protection enabled" if enabled else "Protection disabled; request telemetry remains active"}
 
 @app.get('/api/security')
 def security_status(request: Request):
@@ -837,7 +950,7 @@ async def change_port(request: Request):
         # Port changes require a root-owned, tightly-scoped helper installed by install.sh.
         helper = Path("/usr/local/sbin/idontmonitor-set-port")
         if not helper.exists():
-            raise HTTPException(status_code=503, detail="Port change helper is not installed. Reinstall/upgrade with the v2.3.6 installer.")
+            raise HTTPException(status_code=503, detail="Port change helper is not installed. Reinstall/upgrade with the v4.0.2 installer.")
         result = subprocess.run(["sudo", "-n", str(helper), str(port)], capture_output=True, text=True, timeout=15)
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail="Port change failed safely. Check service logs and firewall rules.")
@@ -968,4 +1081,4 @@ async def vps_reboot(request: Request):
 @app.get('/api/config')
 def public_config(request: Request):
     require_auth(request)
-    return {"version":CFG.get('version','2.3.6'),"theme_default":"Nebula Purple","themes":["Nebula Purple","Cyber Mint","Crimson Pulse","Arctic Blue","Emerald Matrix","Solar Amber","Ultra Dark", "Midnight Emerald Glass VIP"]}
+    return {"version":CFG.get('version','4.0.2'),"theme_default":"Nebula Purple","themes":["Nebula Purple","Cyber Mint","Crimson Pulse","Arctic Blue","Emerald Matrix","Solar Amber","Ultra Dark", "Midnight Emerald Glass VIP"]}
