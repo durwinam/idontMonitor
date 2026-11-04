@@ -547,11 +547,107 @@ def response_for(action, lang='fa'):
     return 'دستور شناخته نشد. برای نمایش منو /start را ارسال کنید.'
 
 
+def _png_chart():
+    """Build a simple real-metrics PNG using the Python standard library only."""
+    import struct, zlib
+    width, height = 720, 360
+    pixels = bytearray([248, 250, 252] * width * height)
+    def rect(x0, y0, x1, y1, color):
+        x0=max(0,min(width,x0)); x1=max(0,min(width,x1)); y0=max(0,min(height,y0)); y1=max(0,min(height,y1))
+        for y in range(y0,y1):
+            start=(y*width+x0)*3
+            pixels[start:(y*width+x1)*3]=bytes(color)*(x1-x0)
+    try:
+        mem={k:int(v) for k,v in re.findall(r'^(MemTotal|MemAvailable):\s+(\d+) kB',open('/proc/meminfo').read(),re.M)}
+        ram=100*(mem['MemTotal']-mem['MemAvailable'])/mem['MemTotal'] if mem.get('MemTotal') else 0
+    except Exception: ram=0
+    try:
+        d=shutil.disk_usage('/'); disk=100*d.used/d.total if d.total else 0
+    except Exception: disk=0
+    cpu=0
+    
+    try:
+        rows=[x for x in json.loads(Path('/var/lib/idontmonitor/metrics-history.json').read_text()) if time.time()-21600 <= int(x.get('timestamp',0)) <= time.time()]
+        if rows: cpu=max(float(x.get('cpu_percent',0)) for x in rows)
+    except Exception: pass
+    for i,(value,color) in enumerate(zip([cpu,ram,disk],[(59,130,246),(16,185,129),(245,158,11)])):
+        y=65+i*95; rect(60,y,660,y+34,(226,232,240)); rect(60,y,60+int(600*max(0,min(100,value))/100),y+34,color)
+    def chunk(kind,data): return struct.pack('!I',len(data))+kind+data+struct.pack('!I',zlib.crc32(kind+data)&0xffffffff)
+    raw=b''.join(b'\x00'+bytes(pixels[y*width*3:(y+1)*width*3]) for y in range(height))
+    return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',width,height,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(raw,6))+chunk(b'IEND',b'')
+
+
+def _send_photo(token, chat_id, caption, photo_bytes):
+    boundary='----idontmonitor'+str(int(time.time()*1000))
+    fields=[]
+    for name,value in [('chat_id',str(chat_id)),('caption',caption[:1024])]:
+        fields.append((f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n').encode())
+    fields.append((f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; filename="idontmonitor-report.png"\r\nContent-Type: image/png\r\n\r\n').encode()+photo_bytes+b'\r\n')
+    body=b''.join(fields)+f'--{boundary}--\r\n'.encode()
+    req=urllib.request.Request(f'https://api.telegram.org/bot{token}/sendPhoto',data=body,headers={'Content-Type':f'multipart/form-data; boundary={boundary}'})
+    with urllib.request.urlopen(req,timeout=20) as response: return json.loads(response.read(1_000_000))
+
+
+def _tunnel_states():
+    try:
+        p=subprocess.run(['systemctl','list-units','--all','--type=service','--no-legend','--no-pager'],capture_output=True,text=True,timeout=4,stdin=subprocess.DEVNULL,close_fds=True,env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C.UTF-8'})
+        if p.returncode: return None
+        states={}
+        pattern=r'(?:ctunnel(?:-engine)?@[A-Za-z0-9_.@-]+|backpack-[A-Za-z0-9_.@-]+|paqet(?:-[A-Za-z0-9_.@-]+)?)\.service'
+        excluded={'backpack-monitor.service','backpack-webui.service','backpack-proxy.service','paqet-relay.service','paqet-auto-reset.service','paqet-tunnel.service'}
+        for line in p.stdout.splitlines():
+            cols=line.split(None,4)
+            if len(cols)>=4 and re.fullmatch(pattern,cols[0]) and cols[0] not in excluded: states[cols[0]]=cols[2]=='active'
+        return states
+    except Exception: return None
+
+
+def _report_caption(states):
+    history_path=Path('/var/lib/idontmonitor/metrics-history.json')
+    events_path=Path('/var/lib/idontmonitor/tunnel-events.json')
+    now=time.time(); history=[]; tunnel_events=[]
+    try: history=[x for x in json.loads(history_path.read_text()) if now-21600 <= int(x.get('timestamp',0)) <= now]
+    except Exception: history=[]
+    try: tunnel_events=[x for x in json.loads(events_path.read_text()) if now-21600 <= float(x.get('timestamp',0)) <= now]
+    except Exception: tunnel_events=[]
+    try:
+        mem={k:int(v) for k,v in re.findall(r'^(MemTotal|MemAvailable):\s+(\d+) kB',open('/proc/meminfo').read(),re.M)}
+        ram_used=max(0,mem.get('MemTotal',0)-mem.get('MemAvailable',0)); ram_total=mem.get('MemTotal',0)
+        ram=round(100*ram_used/ram_total) if ram_total else None
+    except Exception: ram_used=ram_total=0; ram=None
+    try: d=shutil.disk_usage('/'); disk=round(100*d.used/d.total) if d.total else None
+    except Exception: d=None; disk=None
+    peak_cpu=max((float(x['cpu_percent']) for x in history if x.get('cpu_percent') is not None),default=None)
+    active=sum(bool(v) for v in (states or {}).values()) if states is not None else None
+    total=len(states) if states is not None else None
+    lines=[f'📊 گزارش ۶ ساعته idontMonitor', f'زمان: {time.strftime("%Y-%m-%d %H:%M:%S %Z")}',
+           f'بیشترین مصرف CPU: {str(round(peak_cpu,1))+"%" if peak_cpu is not None else "داده کافی نیست"}',
+           f'مصرف RAM: {ram_used/1024**3:.2f} از {ram_total/1024**3:.2f} گیگابایت ({str(ram)+"%" if ram is not None else "ناموجود"})',
+           f'مصرف دیسک: {str(disk)+"%" if disk is not None else "ناموجود"}'+(f' · {d.used/1024**3:.1f}/{d.total/1024**3:.1f} GiB' if d else ''),
+           f'تونل‌های فعال: {active if active is not None else "نامشخص"}',
+           f'تونل‌های غیرفعال: {(total-active) if total is not None else "نامشخص"}']
+    if tunnel_events:
+        lines.append('🚨 مشکلات تونل در این بازه:')
+        for event in tunnel_events[-12:]:
+            stamp=time.strftime('%H:%M:%S',time.localtime(float(event.get('timestamp',now))))
+            lines.append(f'• {stamp} · {event.get("unit","Tunnel")} · {event.get("event","state change")}')
+    else: lines.append('✅ هیچ مشکل تونلی در این بازه ثبت نشده است.')
+    if len(history)<6: lines.append(f'ℹ️ تاریخچه منابع هنوز کامل نیست ({len(history)} نمونه از حدود ۶۰ نمونه مورد انتظار).')
+    return '\n'.join(lines)
+
+
+
 def main():
     global OFFSET
     last_token = ''
     flows = {}  # (user_id, chat_id) -> short-lived, in-memory state; never written to disk.
     languages = load_languages()
+    next_report = time.time() + 21600
+    last_tunnel_check = 0
+    previous_tunnels = None
+    candidate_tunnels = {}
+    candidate_counts = {}
+    down_since = {}
     while True:
         token, admins = load()
         if not token or not admins:
@@ -562,7 +658,56 @@ def main():
             flows.clear()
             last_token = token
         try:
-            result = api(token, 'getUpdates', {'timeout': 25, 'offset': OFFSET, 'allowed_updates': json.dumps(['message', 'callback_query'])}, timeout=35)
+            now = time.time()
+            if now - last_tunnel_check >= 30:
+                current = _tunnel_states()
+                if current is not None:
+                    # Require the same changed state in two consecutive probes before alerting.
+                    if previous_tunnels is None:
+                        previous_tunnels = dict(current)
+                    else:
+                        for unit in sorted(set(previous_tunnels) | set(current)):
+                            observed = current.get(unit, False)
+                            baseline = previous_tunnels.get(unit, True)
+                            if observed == baseline:
+                                candidate_tunnels.pop(unit, None); candidate_counts.pop(unit, None)
+                                continue
+                            if candidate_tunnels.get(unit) == observed:
+                                candidate_counts[unit] = candidate_counts.get(unit, 1) + 1
+                            else:
+                                candidate_tunnels[unit] = observed; candidate_counts[unit] = 1
+                            if candidate_counts.get(unit, 0) < 2:
+                                continue
+                            previous_tunnels[unit] = observed
+                            candidate_tunnels.pop(unit, None); candidate_counts.pop(unit, None)
+                            if not observed:
+                                down_since[unit] = now
+                                message = f'🚨 تونل قطع شد: {unit}\nزمان: {time.strftime("%Y-%m-%d %H:%M:%S %Z")}'
+                            else:
+                                started = down_since.pop(unit, None)
+                                if started is not None:
+                                    duration = max(0, int(now-started))
+                                    message = f'✅ تونل بازیابی شد: {unit}\nمدت قطعی: {duration//60} دقیقه و {duration%60} ثانیه'
+                                else:
+                                    message = f'✅ تونل فعال شد: {unit}'
+                            for admin in admins:
+                                try: send(token, admin, message)
+                                except Exception: pass
+                        # Remove stale names only after a stable missing/down transition.
+                        previous_tunnels = {u:v for u,v in previous_tunnels.items() if u in current or v is False}
+                last_tunnel_check = now
+            if now >= next_report:
+                states = _tunnel_states()
+                try: photo = _png_chart()
+                except Exception: photo = None
+                caption = _report_caption(states)
+                for admin in admins:
+                    try:
+                        if photo: _send_photo(token, admin, caption, photo)
+                        else: send(token, admin, caption + '\n(تولید تصویر ممکن نشد)')
+                    except Exception: pass
+                next_report = now + 21600
+            result = api(token, 'getUpdates' , {'timeout': 25, 'offset': OFFSET, 'allowed_updates': json.dumps(['message', 'callback_query'])}, timeout=35)
             if not result.get('ok'):
                 time.sleep(3); continue
             for update in result.get('result', []):

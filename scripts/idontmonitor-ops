@@ -44,6 +44,189 @@ case "${1-}" in
         printf 'Disabled C-Tunnel instance %s; shared template and tunnel configuration/state were preserved.
 ' "$unit"
         ;;
+      backpack-*.service)
+        # Mirror BackPack's per-tunnel delete lifecycle without invoking its
+        # interactive menu. Every target is derived from a validated name.
+        name="${unit#backpack-}"; name="${name%.service}"
+        [[ "$name" =~ ^[A-Za-z0-9_.-]{1,40}$ ]] || { echo 'invalid BackPack tunnel name' >&2; exit 2; }
+        unit_file="/etc/systemd/system/$unit"
+        config_file="/etc/backpack/$name.toml"
+        metrics_file="/etc/backpack/$name.metrics.json"
+        quota_file="/etc/backpack/$name.quota.json"
+        timer_file="/etc/systemd/system/backpack-restart-$name.timer"
+        timer_service="/etc/systemd/system/backpack-restart-$name.service"
+        [[ -f "$unit_file" && ! -L "$unit_file" ]] || { echo 'BackPack tunnel unit file is missing or unsafe' >&2; exit 2; }
+        [[ -f "$config_file" && ! -L "$config_file" ]] || { echo 'BackPack tunnel config is missing or unsafe; refusing partial deletion' >&2; exit 2; }
+        for file in "$metrics_file" "$quota_file" "$timer_file" "$timer_service"; do
+          if [[ -e "$file" || -L "$file" ]]; then [[ -f "$file" && ! -L "$file" ]] || { echo "unsafe BackPack tunnel state path: $file" >&2; exit 4; }; fi
+        done
+        # Stop only; preserve the enablement symlink until every safety check
+        # and PCK cleanup succeeds. This prevents the partial-delete state seen
+        # when firewall inspection fails after `disable --now`.
+        logger -t idontmonitor-ops "BackPack tunnel deletion requested: $name"
+        systemctl stop "$unit" || { logger -t idontmonitor-ops "BackPack tunnel deletion failed during stop: $name"; echo "BackPack tunnel could not be stopped; unit and configuration preserved: $unit" >&2; exit 3; }
+        if [[ -e "$timer_file" ]]; then
+          systemctl stop "backpack-restart-$name.timer" || { echo 'BackPack scheduled restart could not be stopped; tunnel files preserved' >&2; exit 3; }
+        fi
+        # Extract exact native tokens and perform a bounded, ownership-aware
+        # cleanup of this tunnel's tagged PCK firewall rules. Any uncertainty
+        # aborts before deleting configuration/state.
+        python3 - "$name" "$config_file" <<'PYBP'
+import fcntl, hashlib, json, os, pathlib, re, shlex, subprocess, sys, tomllib
+name, cfgpath = sys.argv[1:]
+base=pathlib.Path('/etc/backpack'); cfg=pathlib.Path(cfgpath)
+if cfg.parent != base or cfg.is_symlink(): raise SystemExit('unsafe config path')
+try:
+    data=tomllib.loads(cfg.read_text())
+except Exception as e: raise SystemExit('BackPack TOML cannot be parsed; refusing deletion: '+str(e))
+tokens=[]
+for section in ('server','client','direct','l3'):
+    value=data.get(section,{})
+    if isinstance(value,dict):
+        token=value.get('token')
+        if isinstance(token,str) and token and token not in tokens: tokens.append(token)
+# PCK rules are tagged with a stable 8-hex digest derived from each token.
+ids={hashlib.sha256(('backpack-pck-v1:'+t).encode()).hexdigest()[:8] for t in tokens}
+if ids:
+    # Match upstream's ownership guard: if a BackPack engine owns packet
+    # sockets, inspect its own -c config and refuse only when it shares one
+    # of these token IDs. Unknown ownership is treated conservatively.
+    packet=pathlib.Path('/proc/net/packet').read_text()
+    socket_inodes={line.split()[8] for line in packet.splitlines()[1:] if len(line.split())==9}
+    for proc in pathlib.Path('/proc').iterdir():
+        if not proc.name.isdigit(): continue
+        try:
+            exe=os.path.basename(os.readlink(proc/'exe'))
+            if not exe.startswith('backpack'): continue
+            owns=any(os.readlink(fd).startswith('socket:[') and os.readlink(fd)[8:-1] in socket_inodes for fd in (proc/'fd').iterdir())
+            if not owns: continue
+            argv=(proc/'cmdline').read_bytes().split(b'\0')
+            cfg_arg=None
+            for i,arg in enumerate(argv[:-1]):
+                if arg == b'-c': cfg_arg=argv[i+1].decode(errors='ignore'); break
+                if arg.startswith(b'-c/'):
+                    cfg_arg=arg[2:].decode(errors='ignore'); break
+            if not cfg_arg or not os.path.isfile(cfg_arg): raise SystemExit('a BackPack packet-socket owner has unknown config; PCK cleanup withheld')
+            try: other=tomllib.loads(pathlib.Path(cfg_arg).read_text())
+            except Exception: raise SystemExit('cannot verify another BackPack packet-socket owner; PCK cleanup withheld')
+            other_tokens=[]
+            for section in ('server','client','direct','l3'):
+                value=other.get(section,{})
+                if isinstance(value,dict) and isinstance(value.get('token'),str): other_tokens.append(value['token'])
+            other_ids={hashlib.sha256(('backpack-pck-v1:'+t).encode()).hexdigest()[:8] for t in other_tokens}
+            if ids & other_ids: raise SystemExit('another BackPack engine still owns this tunnel PCK token; cleanup withheld')
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+    lockdir=pathlib.Path('/run/backpack-pck'); lockdir.mkdir(mode=0o755,parents=True,exist_ok=True)
+    ns=os.stat('/proc/self/ns/net').st_ino
+    for ident in sorted(ids):
+        lock=lockdir/f'{ns}-{ident}.lock'
+        fd=os.open(lock,os.O_CREAT|os.O_RDWR|getattr(os,'O_NOFOLLOW',0),0o600)
+        with os.fdopen(fd,'r+') as lf:
+            try: fcntl.flock(lf,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError: raise SystemExit('PCK guard is still owned by a live carrier; refusing to remove firewall rules')
+            for table in ('filter','raw'):
+                exe=''
+                for candidate in ('/usr/sbin/iptables','/sbin/iptables','/usr/bin/iptables'):
+                    if os.path.exists(candidate): exe=candidate; break
+                if not exe: raise SystemExit('iptables is unavailable; refusing to delete a PCK tunnel with possible stale firewall rules')
+                q=subprocess.run([exe,'-t',table,'-S'],capture_output=True,text=True,timeout=5)
+                if q.returncode != 0:
+                    failures=[(exe,(q.stderr or q.stdout or 'unknown error').strip())]
+                    for candidate in ('/usr/sbin/iptables-nft','/usr/sbin/iptables-legacy','/sbin/iptables-nft','/sbin/iptables-legacy'):
+                        if not os.path.exists(candidate) or candidate==exe: continue
+                        trial=subprocess.run([candidate,'-t',table,'-S'],capture_output=True,text=True,timeout=5)
+                        if trial.returncode==0:
+                            exe=candidate; q=trial; break
+                        failures.append((candidate,(trial.stderr or trial.stdout or 'unknown error').strip()))
+                    else:
+                        detail='; '.join(f'{path}: {msg[:100]}' for path,msg in failures)[:220]
+                        raise SystemExit('cannot inspect PCK firewall rules ('+table+'): '+detail+'; tunnel unit/configuration preserved')
+                for line in q.stdout.splitlines():
+                    try: parts=shlex.split(line)
+                    except ValueError: continue
+                    if len(parts)<3 or parts[0]!='-A': continue
+                    comments=[parts[i+1] for i in range(len(parts)-1) if parts[i]=='--comment']
+                    if not any(c.startswith('backpack-pck-'+ident+'-') for c in comments): continue
+                    args=[exe,'-t',table,'-D']+parts[1:]
+                    d=subprocess.run(args,capture_output=True,text=True,timeout=5)
+                    if d.returncode: raise SystemExit('failed to remove an exact tagged PCK rule; remaining tunnel files were preserved')
+# Atomic JSON edits preserve every other tunnel's records.
+def atomic_json(path, mutate, mode=0o600):
+    if path.is_symlink(): raise RuntimeError('refusing symlink state file: '+str(path))
+    if path.exists():
+        if not path.is_file(): raise RuntimeError('state path is not a regular file: '+str(path))
+        obj=json.loads(path.read_text())
+    else: obj={}
+    result=mutate(obj)
+    if result is None and not obj:
+        path.unlink(missing_ok=True); return
+    raw=(json.dumps(result,ensure_ascii=False,indent=2)+'\n').encode()
+    fd,tmp=__import__('tempfile').mkstemp(prefix='.'+path.name+'.',dir=str(path.parent))
+    try:
+        with os.fdopen(fd,'wb') as f: f.write(raw); f.flush(); os.fsync(f.fileno())
+        os.chmod(tmp,mode); os.replace(tmp,path)
+        dfd=os.open(path.parent,os.O_DIRECTORY); os.fsync(dfd); os.close(dfd)
+    finally:
+        try: os.unlink(tmp)
+        except FileNotFoundError: pass
+try:
+    def forget_meta(o):
+        if not isinstance(o,dict): raise RuntimeError('meta.json root must be an object')
+        o.pop(name,None); return o
+    atomic_json(base/'meta.json',forget_meta,0o644)
+    def forget(o):
+        if not isinstance(o,dict): raise RuntimeError('node-pairs.json root must be an object')
+        pairs=o.get('pairs',{})
+        if not isinstance(pairs,dict): raise RuntimeError('node-pairs.json pairs must be an object')
+        pairs.pop(name,None)
+        if 'pairs' in o and not pairs: o.pop('pairs',None)
+        return None if not o else o
+    atomic_json(base/'node-pairs.json',forget,0o600)
+except Exception as e: raise SystemExit('could not safely clean BackPack metadata/node-pair state: '+str(e))
+PYBP
+        # Only after successful PCK inspection/cleanup may systemd enablement
+        # links and timer units be removed.
+        systemctl disable "$unit" || { echo 'PCK cleanup completed but service could not be disabled; configuration files preserved' >&2; exit 3; }
+        if [[ -e "$timer_file" ]]; then
+          systemctl disable "backpack-restart-$name.timer" || { echo 'PCK cleanup completed but restart timer could not be disabled; configuration files preserved' >&2; exit 3; }
+        fi
+        # Revalidate exact files immediately before mutation.
+        for file in "$unit_file" "$config_file" "$metrics_file" "$quota_file" "$timer_file" "$timer_service"; do
+          if [[ -e "$file" || -L "$file" ]]; then [[ -f "$file" && ! -L "$file" ]] || { echo "unsafe BackPack state path; remaining files preserved: $file" >&2; exit 4; }; fi
+        done
+        # Fold final traffic into the server ledger atomically. Validate both
+        # files and counters; never silently lose totals or double-count.
+        if [[ -e "$metrics_file" ]]; then
+          python3 - "$metrics_file" /etc/backpack/retired-traffic.json <<'PYRETIRE'
+import json, os, pathlib, sys, tempfile
+metrics=pathlib.Path(sys.argv[1]); ledger=pathlib.Path(sys.argv[2]); base=pathlib.Path('/etc/backpack')
+if metrics.parent!=base or ledger.parent!=base or metrics.is_symlink() or not metrics.is_file() or ledger.is_symlink(): raise SystemExit('unsafe BackPack metrics/ledger path')
+snap=json.loads(metrics.read_text())
+old=json.loads(ledger.read_text()) if ledger.exists() else {'bytes_in':0,'bytes_out':0}
+values=[snap.get('bytes_in',0),snap.get('bytes_out',0),old.get('bytes_in',0),old.get('bytes_out',0)]
+if any(type(v) is not int or v<0 for v in values): raise SystemExit('invalid traffic counters')
+result={'bytes_in':values[0]+values[2],'bytes_out':values[1]+values[3]}
+fd,tmp=tempfile.mkstemp(prefix='.retired-traffic.',dir=str(base))
+try:
+    with os.fdopen(fd,'w') as f: json.dump(result,f,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+    os.chmod(tmp,0o644); os.replace(tmp,ledger)
+    dfd=os.open(base,os.O_DIRECTORY); os.fsync(dfd); os.close(dfd)
+finally:
+    try: os.unlink(tmp)
+    except FileNotFoundError: pass
+PYRETIRE
+          rm -- "$metrics_file"
+        fi
+        rm -- "$config_file"
+        [[ ! -e "$quota_file" ]] || rm -- "$quota_file"
+        [[ ! -e "$timer_file" ]] || rm -- "$timer_file"
+        [[ ! -e "$timer_service" ]] || rm -- "$timer_service"
+        rm -- "$unit_file"
+        systemctl daemon-reload || { echo 'Files removed but systemd daemon-reload failed; run systemctl daemon-reload manually' >&2; exit 5; }
+        logger -t idontmonitor-ops "BackPack tunnel deletion completed: $name"
+        printf 'BackPack tunnel fully removed: %s. PCK rules, metadata, node-pair, quota and schedule cleaned; traffic retained in retired ledger. Global BackPack and other tunnels preserved.\n' "$name"
+        ;;
       *)
         unit_file="/etc/systemd/system/$unit"
         [[ -f "$unit_file" && ! -L "$unit_file" ]] || { echo 'only a regular custom unit file may be removed' >&2; exit 2; }
@@ -51,8 +234,7 @@ case "${1-}" in
         systemctl disable "$unit" || { echo "stopped but disable failed; unit definition and configuration were preserved: $unit" >&2; exit 3; }
         rm -- "$unit_file"
         systemctl daemon-reload
-        printf 'Removed custom unit %s; tunnel configuration/data were preserved.
-' "$unit"
+        printf 'Removed custom unit %s; tunnel configuration/data were preserved.\\n' "$unit"
         ;;
     esac
     ;;
