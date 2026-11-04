@@ -3,9 +3,10 @@
 ![لوگوی idontMonitor](static/idontmonitor-logo-full.png)
 
 # idontMonitor
-### پنل پایش سرور، منابع سیستم و وضعیت شبکه
 
-**نسخهٔ ۳.۵.۰** · توسعه‌دهنده: **durwinam**
+### سامانه پیشرفته پایش سرور، مدیریت منابع و امنیت شبکه
+
+**نسخه 4.0.2** · توسعه‌دهنده: **durwinam**
 
 [مخزن گیت‌هاب](https://github.com/durwinam/idontMonitor) · [کانال تلگرام](https://t.me/idontproject)
 
@@ -13,205 +14,161 @@
 
 ---
 
-## v2.3.4 security and UI notes
-
-- Root VPS password changes now require an authenticated, single-use server-side arithmetic CAPTCHA. The challenge expires after three minutes and is bound to the request IP and login session.
-- CAPTCHA issuance and password-change attempts are rate-limited. The ordinary dashboard login CAPTCHA and rate limits remain enabled.
-- API/login responses receive no-store cache headers and the application adds baseline browser security headers.
-- Persian/English strings cover the VPS password/reboot modal and CAPTCHA errors; the selected language is applied to dynamic UI text.
-- Telegram messages try mapped Premium custom emoji entities for CPU/RAM/Disk and other configured glyphs. If Telegram rejects the entities, the same message is retried with the exact original Unicode emoji. An explicit Premium eligibility rejection switches the worker to Unicode fallback; an individual invalid ID triggers only a per-message fallback. IDs can be overridden with `IDM_TELEGRAM_CUSTOM_EMOJI_IDS`.
-- Existing monitoring counters, traffic persistence, tunnel operations, updater behavior, and all eight themes are retained.
-
-**Deployment note:** CAPTCHA state is in process memory; the default installer runs one application worker. If you deliberately configure multiple workers, use a shared challenge store before enabling this flow across workers.
-
-
 ## معرفی
 
-`idontMonitor` یک پنل تحت وب برای مشاهدهٔ وضعیت منابع سرور، مصرف شبکه، تاریخچهٔ ترافیک، آزمون سرعت اتصال و بررسی‌های امنیتی است. این برنامه برای نصب روی سرور شخصی طراحی شده و رابط وب آن از بک‌اند برنامه داده دریافت می‌کند.
+`idontMonitor` یک سامانه تحت وب برای پایش، مدیریت و نظارت بر سرورهای لینوکس است که اطلاعات منابع سیستم، وضعیت شبکه، تاریخچه ترافیک، مدیریت تونل‌ها و ابزارهای امنیتی را در یک پنل یکپارچه ارائه می‌دهد.
 
-## قابلیت‌ها
+نسخه 4.x با تمرکز بر توسعه قابلیت‌های امنیتی، تحلیل اطلاعات تاریخی، مدیریت عملیات و گزارش‌دهی هوشمند ارتقا یافته است.
 
-- پایش مصرف پردازنده، حافظه و فضای دیسک
-- نمایش وضعیت میزبان، زمان روشن‌بودن و میانگین بار سیستم
-- مشاهدهٔ نرخ دریافت و ارسال و تاریخچهٔ ترافیک شبکه
-- آزمون سرعت خروجی سرور با انتقال واقعی و محدودشده
-- نمایش اطلاعات تأخیر، نوسان تأخیر و از دست رفتن بسته‌ها در صورت قابل‌اندازه‌گیری بودن
-- احراز هویت پنل، محدودسازی تلاش‌های ورود و ثبت رویدادهای ورود
-- تنظیمات حساب و پشتیبانی از HTTP یا HTTPS مطابق تنظیمات نصب
-- رابط واکنش‌گرا برای نمایشگرهای دسکتاپ و موبایل
-- انتخاب زبان انگلیسی یا فارسی؛ فارسی با چیدمان راست‌چین و فونت وزیرمتن
-- لینک‌های رسمی گیت‌هاب و تلگرام در پایین پنل
+## قابلیت‌های اصلی
 
+- پایش مصرف CPU، RAM و فضای Disk
+- نمایش وضعیت میزبان، زمان روشن بودن و میانگین بار سیستم
+- نمایش نرخ دریافت و ارسال اطلاعات شبکه
+- تاریخچه مصرف منابع و ترافیک
+- آزمون سرعت اتصال سرور
+- بررسی تأخیر، نوسان تأخیر و Packet Loss در صورت قابل‌اندازه‌گیری بودن
+- مدیریت و نظارت بر تونل‌ها
+- پشتیبانی از BackPack و C-Tunnel
+- مدیریت عملیات و سرویس‌های سیستم
+- گزارش‌دهی و اعلان‌های تلگرام
+- مدیریت VPS و عملیات مدیریتی محافظت‌شده
+- رابط فارسی و انگلیسی با پشتیبانی از RTL
+- رابط واکنش‌گرا برای دسکتاپ و موبایل
 
+## تغییرات و قابلیت‌های اضافه‌شده
 
+### 1. سپر امنیتی Anti-DDoS Shield
 
-## C-Tunnel 0.2.5 compatibility (v2.3.4)
+- اضافه شدن محیط اختصاصی Anti-DDoS.
+- ایجاد فضای مستقل برای نظارت و بررسی وضعیت امنیت شبکه.
+- امکان بررسی ترافیک مشکوک و الگوهای غیرعادی.
+- حالت نظارتی پیش‌فرض بدون مسدودسازی خودکار.
+- جداسازی بخش امنیت از سایر قسمت‌های پنل.
 
-The tunnel manager now understands C-Tunnel's exact `ct-<name>` device and ECMP lane devices `ct-<name>.1` through `.7`; traffic totals include only interfaces matching the exact instance-derived names. C-Tunnel instances are managed through the shared `ctunnel@.service` / `ctunnel-engine@.service` templates, so removing an instance stops and disables that instance without deleting the shared template or tunnel config. If teardown fails, idontMonitor leaves the instance enabled and preserves its state/configuration record rather than hiding the failure.
+### 2. سیستم تاریخچه و تحلیل منابع
 
-## Operations & Tunnel Manager (v2.3.4)
+- اضافه شدن ذخیره‌سازی پایدار اطلاعات منابع سرور.
+- ثبت اطلاعات منابع در بازه‌های یک‌دقیقه‌ای.
+- اضافه شدن تاریخچه وضعیت تونل‌ها.
+- امکان استفاده از اطلاعات تاریخی برای تحلیل وضعیت سرور.
 
-در نسخهٔ 2.3.4 قابلیت‌های مدیریت عملیات حفظ شده‌اند: شناسایی سرویس‌های تانل از systemd، ریستارت گروهی با تأیید، عیب‌یابی فقط‌خواندنی از فهرست مجاز، هشدارهای محلی، حالت تعمیر زمان‌دار، ثبت رویدادهای مدیریتی و پشتیبان‌گیری محدود از تنظیمات هشدار. اجرای شل دلخواه از پنل پشتیبانی نمی‌شود.
+### 3. گزارش‌های هوشمند تلگرام
 
-**محدودیت داده:** آمار ترافیک هر تانل فقط وقتی نمایش داده می‌شود که رابط شبکه با اطمینان به همان سرویس نگاشت شود. در غیر این صورت وضعیت «در دسترس نیست» نشان داده می‌شود. فایل Paqet ارائه‌شده در ورودی این نسخه اسکریپت نصب است؛ idontMonitor موتور Paqet را نصب یا پیکربندی نمی‌کند.
+- اضافه شدن گزارش‌های دوره‌ای شش‌ساعته.
+- گزارش میزان مصرف CPU، RAM و Disk.
+- نمایش تعداد تونل‌های فعال و غیرفعال.
+- ثبت و گزارش مشکلات تونل‌ها در بازه گزارش.
+- ارائه اطلاعات کاربردی برای بررسی وضعیت سرور.
 
-**چرخش لاگ:** فایل فعال `idontmonitor.log` حداکثر 100 MiB است و سه فایل چرخیده نگه داشته می‌شوند. گزارش‌های systemd journal جداگانه تابع تنظیمات journald هستند.
+### 4. سیستم Watchdog و نظارت منابع
 
-## مرکز به‌روزرسانی (v2.3.4)
+- اضافه شدن نظارت خودکار بر مصرف CPU و RAM.
+- پشتیبانی از راه‌اندازی مجدد کنترل‌شده در شرایط بحرانی.
+- در نظر گرفتن محدودیت‌های حفاظتی برای جلوگیری از راه‌اندازی مجدد مکرر.
+- بهبود نظارت بر وضعیت منابع سرور.
 
-نسخهٔ 2.3.4 از Asset دقیق `idontMonitor-vX.Y.Z.tar.gz` را از Release رسمی دریافت می‌کند؛ فقط اگر Asset موجود نباشد از آرشیو خودکار تگ استفاده می‌کند. این مسیر به ZIP وابسته نیست.
+### 5. بهبود مدیریت تونل‌ها
 
-- `sudo idontMonitor update` آخرین GitHub Release پایدار را از آرشیو سورس `tar.gz` مربوط به Tag دریافت می‌کند.
-- `sudo idontMonitor update-main` سورس شاخهٔ `main` را بررسی می‌کند؛ این مسیر نسخهٔ داخل سورس را بررسی می‌کند و برای هر commit جدید، حتی با شماره نسخهٔ ثابت، پوشهٔ مستقل می‌سازد؛ برای محیط عملیاتی همچنان Release پایدار توصیه می‌شود.
-- نسخهٔ تگ، فایل `VERSION` و ساختار سورس قبل از فعال‌سازی اعتبارسنجی می‌شوند.
-- پیش از فعال‌سازی، فایل‌های Python بررسی نحوی می‌شوند؛ سپس نسخهٔ جدید در مسیر staging ساخته می‌شود، helper و unit به‌روزرسانی می‌شوند، symlink جابه‌جا و سلامت سرویس بررسی می‌شود. در صورت شکست، نسخه و فایل‌های کمکی قبلی بازگردانده می‌شوند. در صورت شکست راه‌اندازی/سلامت، بازگشت به نسخهٔ قبلی تلاش می‌شود.
-- پیکربندی `/etc/idontmonitor` و داده‌های پایدار `/var/lib/idontmonitor` خارج از دایرکتوری نسخه‌ها باقی می‌مانند.
-- به‌روزرسانی عادی از Release Tag توصیه می‌شود؛ شاخهٔ `main` برای دریافت تغییرات توسعه است و ممکن است ناپایدار باشد.
+- بهبود سازگاری با BackPack و C-Tunnel.
+- تفکیک وضعیت دسترسی ICMP از سلامت واقعی موتور تونل.
+- پشتیبانی از وضعیت نامشخص در صورت نبود اطلاعات قابل‌اعتماد.
+- بهبود تشخیص وضعیت Peerها.
+- بهبود فرآیند حذف امن تونل‌ها و حفظ اطلاعات در صورت شکست عملیات پاک‌سازی.
 
-## دستاوردهای نصب و راه‌اندازی
+### 6. بهبود امنیت و مدیریت VPS
 
-- انتخاب خودکار یک پورت آزاد در نصب تازه، با آزمون واقعی bind؛ هیچ سرویس دیگری متوقف نمی‌شود.
-- هنگام ارتقا، پورت و تنظیمات اتصال موجود حفظ می‌شوند؛ نصب‌کننده به‌جای حدس زدن، در صورت ناقص بودن متادیتا متوقف می‌شود.
-- سرویس با کاربر سیستمی کم‌دسترسی اجرا می‌شود و تنظیمات/داده‌ها خارج از پوشهٔ نسخه نگهداری می‌شوند.
-- نصب‌کننده برای Debian/Ubuntu طراحی شده و پیش‌نیازهای سیستمی را بررسی یا نصب می‌کند.
+- اضافه شدن کنترل‌های محافظتی برای عملیات مدیریتی.
+- استفاده از ابزار اختصاصی و محدودشده برای عملیات حساس.
+- بهبود حفاظت فرآیند تغییر رمز عبور Root.
+- استفاده از CAPTCHA برای عملیات حساس تغییر رمز عبور.
+- محدودسازی درخواست‌ها و ثبت رویدادهای مدیریتی.
 
-## پیش‌نیازها
+### 7. بهبود مرکز به‌روزرسانی
 
-- سیستم‌عامل لینوکس؛ نصب‌کننده برای محیط‌های Debian/Ubuntu تهیه شده است.
-- Python و ابزارهای لازم که نصب‌کنندهٔ پروژه بررسی یا نصب می‌کند.
-- دسترسی مدیریتی برای نصب سرویس و تنظیم وابستگی‌های سیستم.
-- دسترسی شبکه برای دریافت وابستگی‌ها و اجرای آزمون سرعت.
+- بهبود دریافت نسخه‌های رسمی از GitHub Releases.
+- اعتبارسنجی نسخه و ساختار سورس پیش از فعال‌سازی.
+- بررسی نحوی فایل‌های Python قبل از به‌روزرسانی.
+- استفاده از مسیر staging برای آماده‌سازی نسخه جدید.
+- تلاش برای بازگشت به نسخه قبلی در صورت شکست به‌روزرسانی.
+- حفظ تنظیمات و اطلاعات پایدار هنگام ارتقا.
 
-> نسخه‌های دقیق وابستگی‌ها در `requirements.txt` ثبت شده‌اند. پیش از نصب روی سرور عملیاتی، نصب‌کننده و تنظیمات محیط مقصد را بررسی کنید.
+---
 
-## نصب
+## نصب و راه‌اندازی
 
-روش نصب توصیه‌شده، استفاده از نصب‌کنندهٔ موجود در مخزن رسمی است. ابتدا مخزن را دریافت و محتوای `install.sh` را بررسی کنید؛ سپس آن را با دسترسی مدیریتی اجرا کنید.
+برای نصب از دستور زیر استفاده کنید:
 
 ```bash
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/durwinam/idontMonitor/main/install.sh)"
 ```
 
-رفتار نصب، پورت، مسیر پنل، دامنه و روش فعال‌سازی HTTPS می‌تواند به نسخهٔ نصب‌کننده وابسته باشد. هنگام نصب، مقادیر پیشنهادی را با تنظیمات محیط خود تطبیق دهید.
+پیش از اجرا، محتوای نصب‌کننده و تنظیمات محیط مقصد را بررسی کنید.
 
-## ساختار سورس
+## پیش‌نیازها
+
+- سیستم‌عامل Linux
+- توزیع Debian یا Ubuntu
+- Python و وابستگی‌های موردنیاز پروژه
+- دسترسی مدیریتی برای نصب سرویس‌ها
+- دسترسی شبکه برای دریافت وابستگی‌ها و انجام آزمون‌های اتصال
+
+## ساختار پروژه
 
 ```text
 idontMonitor/
 ├── app/
-│   └── main.py              # برنامهٔ FastAPI، API و منطق فعلی سمت سرور
-├── static/
-│   ├── index.html           # پنل اصلی
-│   ├── login.html           # صفحهٔ ورود
-│   ├── app.js               # رفتار تعاملی رابط
-│   ├── i18n.js              # مدیریت زبان رابط
-│   ├── style.css            # استایل و واکنش‌گرایی
-│   └── ...                  # لوگوها و منابع ثابت
+├── docs/
 ├── locales/
-│   ├── en/messages.json     # واژه‌نامهٔ انگلیسی
-│   └── fa/messages.json     # واژه‌نامهٔ فارسی
-├── docs/                    # مستندات نصب و معماری
-├── systemd/                 # فایل سرویس systemd
-├── tests/                   # تست‌های ساختار و واحد
-├── install.sh               # نصب‌کننده
-├── requirements.txt         # وابستگی‌های پایتون
-├── VERSION                  # نسخهٔ سورس
-├── CHANGELOG.md             # تاریخچهٔ تغییرات
-└── README.md                # همین راهنما
+│   ├── en/
+│   └── fa/
+├── scripts/
+├── static/
+├── systemd/
+├── tests/
+├── install.sh
+├── requirements.txt
+├── VERSION
+├── CHANGELOG.md
+└── README.md
 ```
 
-> این ساختار مستندکنندهٔ سورس فعلی است؛ انتقال ماژول‌های بک‌اند به لایه‌های مستقل باید مرحله‌ای و همراه با تست رگرسیون انجام شود تا منطق عملیاتی تغییر نکند.
+## به‌روزرسانی
 
-## معماری و قواعد توسعه
+برای دریافت نسخه‌های پایدار، از Releaseهای رسمی مخزن GitHub استفاده کنید.
 
-- هر فایل باید مسئولیت مشخص و قابل توضیحی داشته باشد.
-- منطق رابط کاربری، واژه‌نامه‌ها، استایل‌ها و منطق سمت سرور از یکدیگر تفکیک شوند.
-- از فرمت‌بندی استاندارد، نام‌گذاری معنادار و توابع کوتاه و قابل‌آزمون استفاده شود.
-- تنظیمات محیطی و اسرار در سورس یا مستندات عمومی قرار نگیرند.
-- تغییرات معماری باید با تست واحد، تست یکپارچگی و تست رگرسیون همراه باشند.
-- قابلیت‌های موجود، تاریخچهٔ ترافیک و تنظیمات اتصال هنگام به‌روزرسانی باید حفظ شوند.
+[مشاهده مخزن GitHub](https://github.com/durwinam/idontMonitor)
 
-## زبان فارسی و فونت وزیرمتن
-
-زبان از انتخاب‌گر بالای پنل تغییر می‌کند. انتخاب کاربر در مرورگر نگهداری می‌شود. در حالت فارسی، جهت صفحه `RTL` و فونت `Vazirmatn` فعال می‌شود؛ در حالت انگلیسی، رابط به `LTR` برمی‌گردد. نصب‌کننده تلاش می‌کند بستهٔ فونت وزیرمتن را از مخازن توزیع نصب کرده و فایل آن را در منابع محلی پنل قرار دهد؛ در نتیجه رابط برای نمایش فارسی به Google Fonts وابسته نیست.
-
-## اجرای تست‌ها
-
-در پوشهٔ ریشهٔ پروژه اجرا کنید:
-
-```bash
-python -m compileall -q app
-node --check static/app.js
-node --check static/i18n.js
-python tests/test_syntax.py
-python tests/test_units.py
-```
-
-## عیب‌یابی سرویس
-
-نام سرویس و مسیر نصب ممکن است در محیط‌های مختلف تفاوت داشته باشد. از نام سرویس نمایش‌داده‌شده در نصب‌کننده استفاده کنید. برای سرویس systemd با نام `idontmonitor`، دستورهای معمول عبارت‌اند از:
-
-```bash
-sudo systemctl status idontmonitor
-sudo systemctl restart idontmonitor
-sudo journalctl -u idontmonitor -n 100 --no-pager
-```
+شاخه `main` برای توسعه در نظر گرفته شده و ممکن است شامل تغییرات آزمایشی یا ناپایدار باشد.
 
 ## امنیت و نگهداری
 
-- گذرواژه، کلید نشست، فایل پیکربندی و داده‌های تاریخچه را منتشر نکنید.
-- پیش از ارتقا، از پیکربندی و داده‌های پایدار نسخهٔ پشتیبان تهیه کنید.
+- رمزهای عبور، توکن‌ها و کلیدهای خصوصی را در مخزن عمومی قرار ندهید.
+- پیش از به‌روزرسانی از تنظیمات و اطلاعات پایدار نسخه پشتیبان تهیه کنید.
 - اسکریپت نصب و به‌روزرسانی را پیش از اجرا بررسی کنید.
-- آزمون سرعت، ترافیک واقعی مصرف می‌کند و نتایج آن به مسیر شبکه و نقطهٔ پایانی وابسته است.
-- نتیجهٔ تست در محیط توسعه به‌تنهایی اثبات‌کنندهٔ عملکرد روی VPS مقصد نیست.
+- قابلیت نظارت Anti-DDoS جایگزین حفاظت شبکه در سطح دیتاسنتر یا ارائه‌دهنده VPS نیست.
+- نتیجه تست در محیط توسعه به‌تنهایی تضمین‌کننده عملکرد روی VPS مقصد نیست.
 
-## مشارکت در توسعه
+## اطلاعات پروژه
 
-۱. مخزن را Fork کنید.
-۲. برای تغییر خود یک شاخهٔ مستقل بسازید.
-۳. قالب‌بندی و تست‌های مرتبط را اجرا کنید.
-۴. در توضیح درخواست ادغام، رفتار تغییرکرده و نتیجهٔ تست‌ها را بنویسید.
-
-## لینک‌ها و مالکیت
-
-- GitHub: https://github.com/durwinam/idontMonitor
-- Telegram: https://t.me/idontproject
+| مشخصات | مقدار |
+|---|---|
+| نام پروژه | idontMonitor |
+| نسخه | 4.0.2 |
+| توسعه‌دهنده | durwinam |
+| زبان رابط | فارسی و انگلیسی |
+| سیستم‌عامل | Linux |
+| مخزن | GitHub |
+| کانال تلگرام | idontproject |
 
 ---
 
 <div align="center">
 
-**© 2026 durwinam — تمامی حقوق محفوظ است.**
+**توسعه داده شده با ❤️ توسط durwinam**
+
+[GitHub](https://github.com/durwinam/idontMonitor) · [Telegram](https://t.me/idontproject)
+
+© 2026 durwinam — تمامی حقوق محفوظ است.
 
 </div>
-
-### VPS control center (v2.3.4)
-The VPS Management page displays live host facts and includes protected root-password change and reboot operations. Password changes use the fixed root-owned `idontmonitor-ops` helper; arbitrary commands are not accepted. Telegram password changes are admin-only, use a confirmation callback, and delete the incoming password message where Telegram permits. Use this feature only in a private bot chat, never in groups.
-
-## Safe extraction path
-
-The release archive is packaged inside a single `idontMonitor-v2.3.4/` directory. Extract it to a dedicated directory instead of the VPS filesystem root:
-
-```bash
-sudo install -d -m 0755 /opt/idontmonitor-source
-sudo unzip idontMonitor-v2.3.4.zip -d /opt/idontmonitor-source
-cd /opt/idontmonitor-source/idontMonitor-v2.3.4
-sudo bash ./install.sh
-```
-
-Extraction only unpacks the source. The installer installs the application to `/opt/idontmonitor`; do not unzip the archive directly into `/`.
-
-
-## v3.3.0 engine compatibility
-
-BackPack native peer snapshots and C-Tunnel normal/reverse endpoint resolution are handled separately. ICMP reachability is a separate signal from native tunnel health. See `RELEASE-v3.3.0.md` and `SECURITY_AUDIT-v3.3.0.md`.
-
-
-## v3.4.0 analyzer and BackPack diagnostics
-
-The RAM analyzer resolves systemd service ownership through cgroups and parent processes. The disk analyzer shows bounded per-directory top entries. BackPack native peer state is tri-state (connected/disconnected/unknown), and ICMP timeout is shown separately from engine health. See `RELEASE-v3.4.0.md` and `SECURITY_AUDIT-v3.4.0.md`.
-
-
-## v4.0.0 — Shield & six-hour intelligence
-
-Version 4.0.0 adds the dedicated Anti-DDoS Shield workspace, persistent minute-level resource and tunnel history, richer six-hour Telegram reports, and a guarded CPU/RAM auto-reboot watchdog. The Shield module is observational by default and does not automatically block clients; provider-side protection remains necessary for upstream volumetric attacks.
