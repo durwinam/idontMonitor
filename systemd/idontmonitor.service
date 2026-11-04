@@ -13,19 +13,23 @@ ExecStart=/opt/idontmonitor/venv/bin/uvicorn app.main:app --host ${IDM_BIND_HOST
 Restart=on-failure
 RestartSec=3
 UMask=0077
-NoNewPrivileges=false # Required for the narrowly scoped in-panel port helper
+# sudo must be able to perform its setuid/setgid transition for the fixed,
+# root-owned allowlisted helper. Do not set an empty CapabilityBoundingSet:
+# it strips CAP_SETUID/CAP_SETGID and causes sudoers_audit initialization to fail.
+# The service itself still starts as idontmonitor with no ambient capabilities.
+NoNewPrivileges=false
 PrivateTmp=true
+RuntimeDirectory=backpack-pck
+RuntimeDirectoryMode=0755
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/idontmonitor /var/log/idontmonitor /etc/idontmonitor
+ReadWritePaths=/var/lib/idontmonitor /var/log/idontmonitor /etc/idontmonitor /etc/systemd/system /etc/backpack /run/backpack-pck
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-CapabilityBoundingSet=
 AmbientCapabilities=
 
 [Install]

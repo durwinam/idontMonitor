@@ -1,0 +1,13 @@
+[Unit]
+Description=idontMonitor periodic telemetry collector
+After=network.target
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /opt/idontmonitor/current/scripts/idontmonitor-collector.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/idontmonitor
