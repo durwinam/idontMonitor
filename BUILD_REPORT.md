@@ -1,20 +1,17 @@
-# Build report — idontMonitor v2.0.1
+# idontMonitor v2.2.3 — Build & Test Report
 
-## Included changes
-- Version metadata synchronized to `2.0.1` across source, installer, CLI, API health response, and visible web panel labels.
-- Release update reads the latest stable GitHub Release Tag and prefers the exact `idontMonitor-vX.Y.Z.tar.gz` Release asset and verifies the GitHub SHA-256 digest when the API provides one; it falls back to the tag source archive only when the matching asset is absent.
-- `sudo idontMonitor update-main` supports a separate main-branch source path with commit-specific immutable release directories, including updates where the semantic version remains unchanged.
-- Source archive paths, member types, expanded size, and symlinks are validated before extraction; required project files and version consistency are checked.
-- Python syntax is checked before activation; update stages immutable release directories, refreshes external updater/helper/systemd/CLI files with rollback copies, switches the active release atomically, and performs a health check with rollback attempt.
-- Fresh installation probes for a genuinely bindable free port from 20000–45000. Upgrades preserve existing port and connection settings.
-- Configuration and runtime state remain outside versioned release directories.
-- Release archives exclude Python bytecode and pytest caches.
+## Changes
+- VPS Management route now resolves correctly in the dashboard navigation.
+- Added live host information (hostname, OS, kernel, uptime, CPU/load, memory and disk) with loading/error fallbacks.
+- Added root-password change endpoint protected by panel authentication, confirmation, password policy, and a root-owned allowlisted helper.
+- Added Telegram admin actions for root password changes and VPS reboot with confirmation, inline back/cancel navigation, and message editing rather than duplicate messages.
+- Password input messages are deleted on receipt where Telegram permits; the password is held in memory only and never written to logs/config files.
+- Improved mobile layout and theme-aware VPS cards.
 
-## Local validation
-- `bash -n install.sh`: passed
-- `bash -n scripts/idontmonitor-ops`: passed
-- Python compile checks for app and updater: passed
-- `pytest -q tests`: 18 passed
-- Archive contents, version metadata and SHA-256 sums are checked during packaging.
+## Checks
+- Python compileall, JavaScript syntax checks, shell syntax checks, source tests and archive integrity checks run during packaging.
 
-A live installation/upgrade on an external VPS has not been performed by this build process.
+## Not tested
+- No live VPS reboot or real root password change was executed in this build environment.
+- No live Telegram token was available, so real Telegram API message editing/deletion and callback delivery could not be verified.
+- Mobile browser screenshot testing against the production VPS was not available.

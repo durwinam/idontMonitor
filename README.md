@@ -5,7 +5,7 @@
 # idontMonitor
 ### پنل پایش سرور، منابع سیستم و وضعیت شبکه
 
-**نسخهٔ ۲.۲.۹** · توسعه‌دهنده: **durwinam**
+**نسخهٔ ۳.۵.۰** · توسعه‌دهنده: **durwinam**
 
 [مخزن گیت‌هاب](https://github.com/durwinam/idontMonitor) · [کانال تلگرام](https://t.me/idontproject)
 
@@ -200,3 +200,18 @@ sudo bash ./install.sh
 ```
 
 Extraction only unpacks the source. The installer installs the application to `/opt/idontmonitor`; do not unzip the archive directly into `/`.
+
+
+## v3.3.0 engine compatibility
+
+BackPack native peer snapshots and C-Tunnel normal/reverse endpoint resolution are handled separately. ICMP reachability is a separate signal from native tunnel health. See `RELEASE-v3.3.0.md` and `SECURITY_AUDIT-v3.3.0.md`.
+
+
+## v3.4.0 analyzer and BackPack diagnostics
+
+The RAM analyzer resolves systemd service ownership through cgroups and parent processes. The disk analyzer shows bounded per-directory top entries. BackPack native peer state is tri-state (connected/disconnected/unknown), and ICMP timeout is shown separately from engine health. See `RELEASE-v3.4.0.md` and `SECURITY_AUDIT-v3.4.0.md`.
+
+
+## v4.0.0 — Shield & six-hour intelligence
+
+Version 4.0.0 adds the dedicated Anti-DDoS Shield workspace, persistent minute-level resource and tunnel history, richer six-hour Telegram reports, and a guarded CPU/RAM auto-reboot watchdog. The Shield module is observational by default and does not automatically block clients; provider-side protection remains necessary for upstream volumetric attacks.

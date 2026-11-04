@@ -1,3 +1,41 @@
+## v3.6.3
+- Fixed the sudo failure shown by the tunnel-delete UI: removed the empty systemd capability bounding set that stripped CAP_SETUID/CAP_SETGID and prevented sudo from changing to root gid / initializing sudoers_audit.
+- Kept the web application unprivileged and retained empty ambient capabilities; privileged work remains limited to the root-owned argument-validating idontmonitor-ops helper and sudoers allowlist.
+- Added a regression test preventing reintroduction of the empty capability bounding set.
+
+## v3.6.2
+- Hardened BackPack per-tunnel deletion and cleanup; corrected API/UI removal semantics.
+
+## v3.6.1
+
+- Fixed systemd sandboxing that prevented the web process from using the narrowly scoped sudo operations helper (`RestrictSUIDSGID` removed; `NoNewPrivileges=false` remains explicit).
+- Implemented BackPack per-tunnel deletion following the upstream `core.Delete` lifecycle: stop/disable service, remove the tunnel unit and its exact TOML config, per-tunnel metrics/quota files, and scheduled restart timer/service; global BackPack installation and other tunnels are preserved.
+- Added path-type/symlink validation and preflight checks before destructive operations.
+- Added regression tests for the sudo execution path and BackPack deletion lifecycle.
+
+# Changelog
+
+## v3.5.0
+- Rebuilt mobile RAM/Disk analyzer modal with clearer hierarchy and readable destructive controls.
+- Added a confirmed bulk stop for eligible non-root processes with PID/start-time revalidation and protected-service exclusions.
+- Clarified that RAM is reclaimed by stopping processes, not by deleting memory.
+- Preserved allowlist-only single and bulk cleanup for idontMonitor managed log files.
+
+- Rework RAM analyzer attribution: decode systemd escaped cgroup names and walk parent processes to identify the owning service; include command path when executable symlink is unavailable.
+- Correct BackPack state semantics: upstream `connected=null` means unknown, not offline; only explicit `connected=false` is offline, and only explicit true is online.
+- Make BackPack ICMP timeout independent from native peer health in tunnel cards, so filtered ICMP is not presented as a dead tunnel.
+- Improve disk analyzer with bounded top-child breakdowns for each service footprint; scans remain read-only and skip symlinks.
+- Redesign RAM/Disk scan modal for mobile with clearer service hierarchy, memory totals, process details, file/folder breakdowns, and better spacing.
+- Add regression tests for BackPack unknown-state semantics, systemd cgroup escaping, and disk breakdown.
+
+## [3.3.0] - 2026-11-03
+- Resolve BackPack endpoints from fresh native metrics snapshots (`peer` + explicit `connected`) before using static config.
+- Distinguish BackPack native peer state from ICMP reachability; stale/disconnected snapshots no longer fall back to stale config endpoints.
+- Resolve C-Tunnel normal endpoints from the canonical `state.json` `remote_ip`; reverse listeners probe `tun_remote4` through the exact `ct-<name>` interface.
+- Return endpoint source/mode/interface metadata and native BackPack health to the tunnel UI.
+- Include root-owned daemons in read-only RAM attribution so system services such as database and tunnel processes are not omitted; stop actions remain restricted.
+- Add regression coverage for BackPack connected/disconnected snapshots and C-Tunnel normal/reverse endpoint semantics.
+
 ## [2.3.4] - 2026-10-30
 - Updated C-Tunnel compatibility for release 0.2.5.
 - Aggregate RX/TX counters across the exact C-Tunnel base interface and source-defined ECMP lane interfaces (`.1` through `.7`), without counting unrelated interfaces.
@@ -107,3 +145,19 @@
 - Added live CPU utilization percentage to Telegram status and resource summaries.
 - Expanded Persian localization fallbacks for login and VPS management.
 - Improved iPhone safe-area layout, RTL input alignment, and reduced-motion behavior.
+
+## v3.6.0
+- Fixed active idontMonitor log cleanup to safely reopen the rotating log handler and recreate the active log file immediately.
+- Added reliable cleanup of selected rotated idontMonitor log files.
+- Fixed C-Tunnel shared-template instance removal validation while preserving shared templates and tunnel data.
+- Installer/updater now refresh the restricted operations helper and validate sudoers policy.
+- Replaced browser-native analyzer/tunnel action dialogs with branded idontMonitor confirmation and toast UI.
+- Improved RAM analyzer protected-process visibility and mobile analyzer presentation.
+
+## v4.0.0 — Shield, six-hour intelligence and guarded recovery
+
+- Added a dedicated Anti-DDoS Shield workspace with application-layer request-rate telemetry, top source rates and anomaly observations. Automatic IP blocking remains disabled to avoid collateral damage to legitimate high-concurrency traffic; upstream volumetric mitigation is explicitly out of host scope.
+- Added a root-owned minute telemetry collector and persistent 24-hour resource/tunnel event history for accurate six-hour reports.
+- Reworked Telegram six-hour reporting to show peak sampled CPU, RAM used/total/percent, disk used/total/percent, active/inactive tunnels and tunnel incidents in the reporting window.
+- Added a root-owned systemd watchdog: CPU OR memory pressure above 90% for 120 seconds triggers a Telegram warning, 15-second grace period, a final pressure recheck and a 30-minute reboot cooldown.
+- Preserved existing application features and added dedicated systemd collector/watchdog timers to the installer.
