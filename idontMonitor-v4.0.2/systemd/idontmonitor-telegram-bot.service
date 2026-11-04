@@ -1,0 +1,33 @@
+[Unit]
+Description=idontMonitor Telegram Bot Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=idontmonitor
+Group=idontmonitor
+Environment=IDM_TELEGRAM_CONFIG=/var/lib/idontmonitor/telegram-bot.json
+WorkingDirectory=/opt/idontmonitor/current
+ExecStart=/usr/bin/python3 /opt/idontmonitor/current/scripts/idontmonitor-telegram-bot.py
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/idontmonitor/current
+ReadWritePaths=/var/lib/idontmonitor /var/log/idontmonitor
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Collect idontMonitor resource and tunnel history every minute
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Persistent=true
+[Install]
+WantedBy=timers.target
